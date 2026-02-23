@@ -17,9 +17,13 @@ st.set_page_config(page_title="市场总览", page_icon="📊", layout="wide")
 st.title("📊 市场总览")
 st.caption("全市场行情 · 板块资金 · 宏观数据 · 市场风格")
 
-if st.button("🔄 刷新", type="primary"):
-    st.cache_data.clear()
-    st.rerun()
+col_r1, col_r2 = st.columns([1, 3])
+with col_r1:
+    if st.button("🔄 刷新", type="primary"):
+        st.cache_data.clear()
+        st.rerun()
+with col_r2:
+    st.caption("💡 首次加载约10-30秒（海外服务器访问国内数据源），缓存后秒开")
 
 st.divider()
 

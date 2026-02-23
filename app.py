@@ -34,35 +34,53 @@ st.title("🔭 寻星市场情报中心")
 st.markdown("**Xunxing Market Intelligence Center** · Phase 1")
 st.divider()
 
-c1, c2, c3 = st.columns(3)
+# ============================================================
+# 可点击的导航卡片
+# ============================================================
+col1, col2, col3 = st.columns(3)
 
-with c1:
-    st.markdown("### 📰 资讯中心")
-    st.markdown("财联社电报 + 东财新闻\n\nAI自动分类、情感分析、行业关联")
+with col1:
+    st.markdown("""
+    ### 📰 资讯中心
+    财联社电报 + 东财新闻
 
-with c2:
-    st.markdown("### 📊 市场总览")
-    st.markdown("指数行情 · 涨跌统计\n\n行业板块 · 宏观数据 · ETF")
+    AI自动分类 · 情感分析 · 行业关联
+    """)
+    st.page_link("pages/1_News.py", label="👉 进入资讯中心", icon="📰", use_container_width=True)
 
-with c3:
-    st.markdown("### 📝 每日研报")
-    st.markdown("AI综合分析报告\n\n配置建议 · 行业推荐 · 个股线索")
+with col2:
+    st.markdown("""
+    ### 📊 市场总览
+    指数行情 · 涨跌统计
+
+    行业板块 · 宏观数据 · ETF
+    """)
+    st.page_link("pages/2_Market.py", label="👉 进入市场总览", icon="📊", use_container_width=True)
+
+with col3:
+    st.markdown("""
+    ### 📝 每日研报
+    AI综合分析报告
+
+    配置建议 · 行业推荐 · 个股线索
+    """)
+    st.page_link("pages/3_Report.py", label="👉 进入每日研报", icon="📝", use_container_width=True)
 
 st.divider()
 
-st.markdown("👈 **通过左侧导航栏进入各模块**")
+st.caption("💡 **关于加载速度**：Streamlit Cloud 服务器在海外，首次访问国内数据源需要10-30秒，数据缓存后会快很多。")
 
 st.divider()
 
 with st.expander("⚙️ 部署配置指南"):
     st.markdown("""
-**1. DeepSeek API 配置（启用AI分析必须）**
-1. 访问 [platform.deepseek.com](https://platform.deepseek.com/) 注册
+**DeepSeek API 配置（启用AI分析必须）**
+1. 注册 [platform.deepseek.com](https://platform.deepseek.com/)
 2. 创建 API Key，充值10元
 3. Streamlit Cloud → Settings → Secrets：
 ```toml
 DEEPSEEK_API_KEY = "sk-你的密钥"
 ```
 
-**2. 数据源**：AKShare + 财联社 均为免费，无需配置。
+**数据源**：AKShare + 财联社 均为免费，无需配置。
     """)

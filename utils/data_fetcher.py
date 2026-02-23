@@ -1,5 +1,6 @@
 """
 数据采集模块 - AKShare + 财联社 + 东方财富
+优化：超时控制 + 错误隔离 + 缓存
 """
 
 import akshare as ak
@@ -8,12 +9,25 @@ import requests
 import json
 import time
 import os
+import concurrent.futures
 from datetime import datetime
 from bs4 import BeautifulSoup
 import streamlit as st
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
 os.makedirs(DATA_DIR, exist_ok=True)
+
+
+def _safe_call(func, timeout=20, default=None):
+    """带超时的安全调用，防止单个接口卡住整个页面"""
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(func)
+            return future.result(timeout=timeout)
+    except concurrent.futures.TimeoutError:
+        return default
+    except Exception:
+        return default
 
 
 # ============================================================
@@ -23,29 +37,21 @@ os.makedirs(DATA_DIR, exist_ok=True)
 @st.cache_data(ttl=600, show_spinner=False)
 def get_major_indices() -> pd.DataFrame:
     """获取主要指数实时行情"""
-    try:
+    def _fetch():
         df = ak.stock_zh_index_spot_em()
         if df is None or df.empty:
             return pd.DataFrame()
-
         target = ["上证指数", "深证成指", "创业板指", "科创50", "沪深300", "中证500", "中证1000"]
         result = df[df["名称"].isin(target)].copy()
-
-        keep_cols = []
-        for c in ["名称", "最新价", "涨跌幅", "涨跌额", "成交额"]:
-            if c in result.columns:
-                keep_cols.append(c)
-
+        keep_cols = [c for c in ["名称", "最新价", "涨跌幅", "涨跌额", "成交额"] if c in result.columns]
         result = result[keep_cols].reset_index(drop=True)
-
         for c in ["最新价", "涨跌幅", "涨跌额", "成交额"]:
             if c in result.columns:
                 result[c] = pd.to_numeric(result[c], errors="coerce")
-
         return result
 
-    except Exception as e:
-        return pd.DataFrame({"error": [str(e)]})
+    result = _safe_call(_fetch, timeout=15, default=pd.DataFrame())
+    return result if result is not None else pd.DataFrame()
 
 
 # ============================================================
@@ -55,14 +61,12 @@ def get_major_indices() -> pd.DataFrame:
 @st.cache_data(ttl=600, show_spinner=False)
 def get_market_overview() -> dict:
     """全A涨跌统计"""
-    try:
+    def _fetch():
         df = ak.stock_zh_a_spot_em()
         if df is None or df.empty:
             return {}
-
         df["涨跌幅"] = pd.to_numeric(df["涨跌幅"], errors="coerce")
         df["成交额"] = pd.to_numeric(df["成交额"], errors="coerce")
-
         total = len(df)
         up = int((df["涨跌幅"] > 0).sum())
         down = int((df["涨跌幅"] < 0).sum())
@@ -70,15 +74,15 @@ def get_market_overview() -> dict:
         limit_up = int((df["涨跌幅"] >= 9.8).sum())
         limit_down = int((df["涨跌幅"] <= -9.8).sum())
         total_amount = round(df["成交额"].sum() / 1e8, 0)
-
         return {
             "上涨": up, "下跌": down, "平盘": flat,
             "涨停": limit_up, "跌停": limit_down,
             "总成交额亿": total_amount,
             "上涨占比": round(up / total * 100, 1) if total else 0,
         }
-    except Exception as e:
-        return {"error": str(e)}
+
+    result = _safe_call(_fetch, timeout=20, default={})
+    return result if result else {}
 
 
 # ============================================================
@@ -88,33 +92,33 @@ def get_market_overview() -> dict:
 @st.cache_data(ttl=900, show_spinner=False)
 def get_industry_board() -> pd.DataFrame:
     """行业板块行情"""
-    try:
+    def _fetch():
         df = ak.stock_board_industry_name_em()
         if df is not None and not df.empty:
             for c in ["涨跌幅", "总市值", "换手率"]:
                 if c in df.columns:
                     df[c] = pd.to_numeric(df[c], errors="coerce")
-            df = df.sort_values("涨跌幅", ascending=False).reset_index(drop=True)
-            return df
-    except Exception:
-        pass
-    return pd.DataFrame()
+            return df.sort_values("涨跌幅", ascending=False).reset_index(drop=True)
+        return pd.DataFrame()
+
+    result = _safe_call(_fetch, timeout=15, default=pd.DataFrame())
+    return result if result is not None else pd.DataFrame()
 
 
 @st.cache_data(ttl=900, show_spinner=False)
 def get_concept_board() -> pd.DataFrame:
     """概念板块行情"""
-    try:
+    def _fetch():
         df = ak.stock_board_concept_name_em()
         if df is not None and not df.empty:
             for c in ["涨跌幅", "总市值", "换手率"]:
                 if c in df.columns:
                     df[c] = pd.to_numeric(df[c], errors="coerce")
-            df = df.sort_values("涨跌幅", ascending=False).reset_index(drop=True)
-            return df
-    except Exception:
-        pass
-    return pd.DataFrame()
+            return df.sort_values("涨跌幅", ascending=False).reset_index(drop=True)
+        return pd.DataFrame()
+
+    result = _safe_call(_fetch, timeout=15, default=pd.DataFrame())
+    return result if result is not None else pd.DataFrame()
 
 
 # ============================================================
@@ -162,10 +166,9 @@ def get_macro_data() -> dict:
 @st.cache_data(ttl=600, show_spinner=False)
 def get_style_data() -> dict:
     """大小盘风格指标"""
-    try:
+    def _fetch():
         hs300 = ak.stock_zh_index_daily_em(symbol="sh000300")
         zz1000 = ak.stock_zh_index_daily_em(symbol="sh000852")
-
         if hs300 is not None and len(hs300) >= 6 and zz1000 is not None and len(zz1000) >= 6:
             hs_5d = (float(hs300.iloc[-1]["close"]) / float(hs300.iloc[-6]["close"]) - 1) * 100
             zz_5d = (float(zz1000.iloc[-1]["close"]) / float(zz1000.iloc[-6]["close"]) - 1) * 100
@@ -174,9 +177,10 @@ def get_style_data() -> dict:
                 "中证1000_5日": round(zz_5d, 2),
                 "偏好": "偏大盘" if hs_5d > zz_5d else "偏小盘",
             }
-    except Exception:
-        pass
-    return {}
+        return {}
+
+    result = _safe_call(_fetch, timeout=15, default={})
+    return result if result else {}
 
 
 # ============================================================
