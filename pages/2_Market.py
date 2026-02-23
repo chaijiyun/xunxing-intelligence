@@ -1,5 +1,5 @@
 """
-📊 市场总览 - 行情 · 板块 · 资金 · 宏观
+📊 市场总览 - 寻星 FOF 投研驾驶舱
 """
 import streamlit as st
 import pandas as pd
@@ -14,32 +14,63 @@ from utils.data_fetcher import (
 )
 
 st.set_page_config(page_title="市场总览", page_icon="📊", layout="wide")
-st.title("📊 市场总览")
-st.caption("全市场行情 · 板块资金 · 宏观数据 · 市场风格")
+st.title("📊 寻星投研驾驶舱")
+st.caption("自上而下观测：宏观环境 · 市场风格 · 宽基指数 · 结构性主线")
 
-col_r1, col_r2 = st.columns([1, 3])
+col_r1, col_r2 = st.columns([1, 5])
 with col_r1:
-    if st.button("🔄 刷新", type="primary"):
+    if st.button("🔄 刷新数据", type="primary"):
         st.cache_data.clear()
         st.rerun()
 with col_r2:
-    st.caption("💡 首次加载约10-30秒（海外服务器访问国内数据源），缓存后秒开")
+    st.info("💡 FOF 视角：优先研判宏观与风格，再通过 ETF 和板块寻找结构性落地工具。")
 
 st.divider()
 
 # ============================================================
-# 1. 指数行情
+# 第一层：自上而下 - 宏观与全局风格 (CIO 关注核心)
 # ============================================================
-st.subheader("📈 主要指数")
+st.subheader("🧭 宏观环境与市场风格")
+col_m1, col_m2 = st.columns([1, 1])
 
-with st.spinner("加载指数..."):
+with col_m1:
+    with st.spinner("加载宏观环境..."):
+        macro = get_macro_data()
+    if macro:
+        # 使用容器让排版更紧凑
+        with st.container(border=True):
+            st.markdown("**🌐 关键宏观指标**")
+            m_cols = st.columns(len(macro))
+            for i, (k, v) in enumerate(macro.items()):
+                m_cols[i].metric(k, str(v))
+    else:
+        st.warning("宏观数据暂不可用")
+
+with col_m2:
+    with st.spinner("计算风格暴露..."):
+        style = get_style_data()
+    if style:
+        with st.container(border=True):
+            st.markdown("**🎭 大小盘风格 (近5日)**")
+            s1, s2, s3 = st.columns(3)
+            s1.metric("风格偏好", style.get("偏好", "—"))
+            s2.metric("沪深300", f"{style.get('沪深300_5日', '—')}%")
+            s3.metric("中证1000", f"{style.get('中证1000_5日', '—')}%")
+    else:
+        st.warning("风格数据暂不可用")
+
+# ============================================================
+# 第二层：宽基指数与市场情绪
+# ============================================================
+st.subheader("📈 宽基指数与市场情绪")
+
+with st.spinner("加载指数行情..."):
     idx_df = get_major_indices()
 
 if idx_df is not None and not idx_df.empty and "error" not in idx_df.columns:
     cols = st.columns(min(len(idx_df), 7))
     for i, (_, row) in enumerate(idx_df.iterrows()):
-        if i >= len(cols):
-            break
+        if i >= len(cols): break
         name = row.get("名称", "")
         price = row.get("最新价", 0)
         chg = row.get("涨跌幅", 0)
@@ -50,119 +81,49 @@ if idx_df is not None and not idx_df.empty and "error" not in idx_df.columns:
                 f"{chg:+.2f}%" if pd.notna(chg) else "—",
                 delta_color="normal" if (pd.notna(chg) and chg >= 0) else "inverse",
             )
-else:
-    st.info("指数数据加载中...")
 
-# ============================================================
-# 2. 涨跌概况
-# ============================================================
-st.divider()
-st.subheader("🎯 全A涨跌")
-
-with st.spinner("统计中..."):
+with st.spinner("统计赚钱效应..."):
     ov = get_market_overview()
 
 if ov and "error" not in ov:
-    c1, c2, c3, c4, c5, c6 = st.columns(6)
-    c1.metric("上涨", ov.get("上涨", 0), f"{ov.get('上涨占比',0)}%")
-    c2.metric("下跌", ov.get("下跌", 0))
-    c3.metric("平盘", ov.get("平盘", 0))
-    c4.metric("涨停", ov.get("涨停", 0))
-    c5.metric("跌停", ov.get("跌停", 0))
-    c6.metric("成交额", f"{ov.get('总成交额亿',0):,.0f}亿")
-else:
-    st.info("涨跌数据加载中...")
+    with st.container(border=True):
+        c1, c2, c3, c4, c5, c6 = st.columns(6)
+        c1.metric("上涨家数", ov.get("上涨", 0), f"占比 {ov.get('上涨占比',0)}%")
+        c2.metric("下跌家数", ov.get("下跌", 0))
+        c3.metric("平盘家数", ov.get("平盘", 0))
+        c4.metric("涨停", ov.get("涨停", 0))
+        c5.metric("跌停", ov.get("跌停", 0))
+        c6.metric("两市总成交额", f"{ov.get('总成交额亿',0):,.0f} 亿")
 
 # ============================================================
-# 3. 市场风格
-# ============================================================
-st.divider()
-st.subheader("🎭 市场风格（近5日）")
-
-with st.spinner("计算风格..."):
-    style = get_style_data()
-
-if style:
-    s1, s2, s3 = st.columns(3)
-    s1.metric("风格偏好", style.get("偏好", "—"))
-    s2.metric("沪深300", f"{style.get('沪深300_5日', '—')}%")
-    s3.metric("中证1000", f"{style.get('中证1000_5日', '—')}%")
-else:
-    st.info("风格数据计算中...")
-
-# ============================================================
-# 4. 行业板块
+# 第三层：结构性机会与底层工具 (使用 Tabs 优化前端渲染性能)
 # ============================================================
 st.divider()
-st.subheader("🏭 行业板块涨跌幅")
+st.subheader("🧩 结构性主线与工具箱")
 
-with st.spinner("加载行业板块..."):
-    ind_df = get_industry_board()
+# 使用选项卡（Tabs）可以避免长表格堆叠导致的页面滚动卡顿
+tab1, tab2, tab3 = st.tabs(["📦 ETF 战术工具箱", "🏭 行业板块追踪", "🔥 概念题材热度"])
 
-if ind_df is not None and not ind_df.empty:
-    show_cols = [c for c in ["板块名称", "涨跌幅", "总市值", "换手率", "上涨家数", "下跌家数"]
-                 if c in ind_df.columns]
-    if show_cols:
-        st.dataframe(ind_df[show_cols].head(30), use_container_width=True, height=400)
-    else:
-        st.dataframe(ind_df.head(30), use_container_width=True, height=400)
-else:
-    st.info("行业数据加载中...")
+with tab1:
+    with st.spinner("加载 ETF 工具箱..."):
+        etf_df = get_etf_list()
+    if etf_df is not None and not etf_df.empty:
+        show_cols = [c for c in ["代码", "名称", "最新价", "涨跌幅", "成交额"] if c in etf_df.columns]
+        st.dataframe(etf_df[show_cols] if show_cols else etf_df, use_container_width=True, height=350)
 
-# ============================================================
-# 5. 概念板块
-# ============================================================
-st.divider()
-st.subheader("🔥 概念板块 TOP 20")
+with tab2:
+    with st.spinner("扫描行业异动..."):
+        ind_df = get_industry_board()
+    if ind_df is not None and not ind_df.empty:
+        show_cols = [c for c in ["板块名称", "涨跌幅", "总市值", "换手率", "上涨家数", "下跌家数"] if c in ind_df.columns]
+        st.dataframe(ind_df[show_cols].head(30) if show_cols else ind_df.head(30), use_container_width=True, height=350)
 
-with st.spinner("加载概念板块..."):
-    con_df = get_concept_board()
-
-if con_df is not None and not con_df.empty:
-    show_cols = [c for c in ["板块名称", "涨跌幅", "总市值", "换手率", "上涨家数", "下跌家数"]
-                 if c in con_df.columns]
-    if show_cols:
-        st.dataframe(con_df[show_cols].head(20), use_container_width=True, height=400)
-    else:
-        st.dataframe(con_df.head(20), use_container_width=True, height=400)
-else:
-    st.info("概念数据加载中...")
-
-# ============================================================
-# 6. 宏观数据
-# ============================================================
-st.divider()
-st.subheader("🌐 宏观经济")
-
-with st.spinner("加载宏观数据..."):
-    macro = get_macro_data()
-
-if macro:
-    mcols = st.columns(len(macro))
-    for i, (k, v) in enumerate(macro.items()):
-        mcols[i].metric(k, str(v))
-else:
-    st.info("宏观数据加载中...")
-
-# ============================================================
-# 7. ETF
-# ============================================================
-st.divider()
-st.subheader("📦 ETF 行情")
-
-with st.spinner("加载ETF..."):
-    etf_df = get_etf_list()
-
-if etf_df is not None and not etf_df.empty:
-    show_cols = [c for c in ["代码", "名称", "最新价", "涨跌幅", "成交额"]
-                 if c in etf_df.columns]
-    if show_cols:
-        st.dataframe(etf_df[show_cols], use_container_width=True, height=400)
-    else:
-        st.dataframe(etf_df, use_container_width=True, height=400)
-else:
-    st.info("ETF数据加载中...")
+with tab3:
+    with st.spinner("扫描概念热度..."):
+        con_df = get_concept_board()
+    if con_df is not None and not con_df.empty:
+        show_cols = [c for c in ["板块名称", "涨跌幅", "总市值", "换手率", "上涨家数", "下跌家数"] if c in con_df.columns]
+        st.dataframe(con_df[show_cols].head(20) if show_cols else con_df.head(20), use_container_width=True, height=350)
 
 # 页脚
-st.divider()
 st.caption(f"更新时间: {datetime.now().strftime('%H:%M:%S')} · 数据来源: AKShare · 仅供参考")
