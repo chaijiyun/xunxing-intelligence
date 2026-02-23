@@ -1,6 +1,6 @@
 """
-数据采集模块 - AKShare + 财联社 + 东方财富 + 新浪财经聚合
-军规级优化：全局超时控制(8秒) + 底层SSL证书修复 + 多源资讯聚合防断供
+数据采集模块 - 寻星情报中心专属原生直连引擎
+军规级优化：全局超时控制(8秒) + 底层SSL证书修复 + 原生API直连防屏蔽
 """
 
 import akshare as ak
@@ -191,81 +191,76 @@ def get_style_data() -> dict:
 
 
 # ============================================================
-# 6. 财联社电报 (终极版：纯 AKShare 多源聚合，确保数量充足)
+# 6. 资讯中心 (终极版：原生API直连，彻底脱离 AKShare 的限制)
 # ============================================================
 @st.cache_data(ttl=300, show_spinner=False)
 def get_cls_telegraph(count: int = 50) -> list:
-    """多源聚合资讯 - 确保获取到指定数量"""
+    """纯原生直连：新浪财经 7x24 + 东方财富直连"""
     telegraphs = []
     
-    # 1. 第一优先级：AKShare 官方维护的财联社接口 (最懂金融反爬)
+    # 1. 第一优先级：新浪财经 7x24 直播原生底层接口 (极其稳定，无反爬)
     try:
-        df_cls = ak.stock_telegraph_cls()
-        if df_cls is not None and not df_cls.empty:
-            for _, row in df_cls.head(count).iterrows():
-                title = str(row.get("标题", ""))
-                content = str(row.get("内容", ""))
-                if not title and content: title = content[:60] + "..."
+        url = f"https://zhibo.sina.com.cn/api/zhibo/feed?page=1&page_size={count + 20}&zhibo_id=152&tag_id=0&dire=f&dpc=1"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
+        }
+        resp = requests.get(url, headers=headers, timeout=8, verify=False)
+        if resp.status_code == 200:
+            items = resp.json().get("result", {}).get("data", {}).get("feed", {}).get("list", [])
+            for item in items:
+                if len(telegraphs) >= count: break
+                rich_text = item.get("rich_text", "")
+                if not rich_text: continue
                 
-                time_val = str(row.get("发布时间", ""))
-                pub_time = time_val.split(" ")[-1][:5] if time_val else ""
-
+                # 智能剥离【标题】和内容
+                title = ""
+                content = rich_text
+                if "】" in rich_text and rich_text.startswith("【"):
+                    parts = rich_text.split("】", 1)
+                    title = parts[0].replace("【", "").strip()
+                    content = parts[1].strip() if len(parts) > 1 else title
+                else:
+                    title = content[:60] + "..."
+                    
+                time_str = item.get("create_time", "") # 格式类似 "2026-02-23 20:03:06"
+                pub_time = time_str.split(" ")[1][:5] if " " in time_str else time_str
+                
                 telegraphs.append({
                     "time": pub_time,
                     "title": title,
                     "content": content,
                     "important": False,
-                    "source": "财联社",
+                    "source": "新浪财经"
                 })
     except Exception as e:
-        print(f"[报错诊断] AKShare财联社获取失败: {e}")
+        print(f"[报错诊断] 新浪原生接口直连失败: {e}")
 
-    # 2. 第二优先级：如果财联社挂了，或者数量不够，用东方财富补齐
+    # 2. 第二优先级：如果新浪挂了，用东方财富原生底层接口补齐
     if len(telegraphs) < count:
+        print(f"[状态] 新浪数据不足，正在启用东方财富原生接口补底...")
         try:
-            print(f"[状态] 资讯数量不足({len(telegraphs)}条)，正在使用东方财富补充...")
-            df_em = ak.stock_news_em(symbol="全部")
-            if df_em is not None and not df_em.empty:
-                remain_count = count - len(telegraphs)
-                for _, row in df_em.head(remain_count + 20).iterrows():
+            url = f"https://fast-infoapi.eastmoney.com/api/news/list?client=web&biz=live&pageSize={count}&pageIndex=1"
+            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+            resp = requests.get(url, headers=headers, timeout=8, verify=False)
+            if resp.status_code == 200:
+                items = resp.json().get("data", [])
+                for item in items:
                     if len(telegraphs) >= count: break
-                    t_title = str(row.get("新闻标题", ""))
+                    t_title = item.get("title", "")
+                    content = item.get("digest", "") or t_title
                     # 过滤重复新闻
                     if t_title and not any(t_title in t["title"] for t in telegraphs):
-                        time_val = str(row.get("发布时间", ""))
-                        pub_time = time_val.split(" ")[-1][:5] if time_val else ""
+                        time_str = item.get("showTime", "") # 格式类似 "2026-02-23 20:00:00"
+                        pub_time = time_str.split(" ")[1][:5] if " " in time_str else time_str
                         telegraphs.append({
                             "time": pub_time,
                             "title": t_title,
-                            "content": str(row.get("新闻内容", ""))[:300],
+                            "content": content,
                             "important": False,
-                            "source": "东方财富",
+                            "source": "东方财富"
                         })
         except Exception as e:
-            print(f"[报错诊断] 东方财富补充失败: {e}")
-
-    # 3. 第三优先级：新浪财经 24 小时全球直播补底
-    if len(telegraphs) < count:
-        try:
-            print(f"[状态] 资讯数量仍不足({len(telegraphs)}条)，正在使用新浪财经补充...")
-            df_sina = ak.stock_info_global_sina()
-            if df_sina is not None and not df_sina.empty:
-                remain_count = count - len(telegraphs)
-                for _, row in df_sina.head(remain_count + 20).iterrows():
-                    if len(telegraphs) >= count: break
-                    t_title = str(row.get("标题", ""))
-                    if t_title and not any(t_title in t["title"] for t in telegraphs):
-                        time_val = str(row.get("发布时间", ""))
-                        pub_time = time_val.split(" ")[-1][:5] if time_val else ""
-                        telegraphs.append({
-                            "time": pub_time,
-                            "title": t_title,
-                            "content": str(row.get("内容", ""))[:300],
-                            "important": False,
-                            "source": "新浪财经",
-                        })
-        except Exception as e:
-            pass
+            print(f"[报错诊断] 东财原生接口直连失败: {e}")
 
     return telegraphs[:count]
 
