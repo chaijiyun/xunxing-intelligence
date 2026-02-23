@@ -64,9 +64,9 @@ if cached:
 
 c1, c2 = st.columns(2)
 with c1:
-    gen_btn = st.button("🚀 生成新报告", type="primary", use_container_width=True, disabled=not has_api)
+    gen_btn = st.button("🚀 生成新报告", type="primary", width="stretch", disabled=not has_api)
 with c2:
-    load_btn = st.button("📄 查看缓存", use_container_width=True, disabled=not cached)
+    load_btn = st.button("📄 查看缓存", width="stretch", disabled=not cached)
 
 report = None
 
@@ -173,12 +173,12 @@ border: 1px solid rgba(255,107,53,0.2); margin-bottom:20px;">
     with c1:
         st.download_button("📄 下载 Markdown", report,
                            f"寻星日报_{datetime.now().strftime('%Y%m%d')}.md",
-                           "text/markdown", use_container_width=True)
+                           "text/markdown", width="stretch")
     with c2:
         st.download_button("📝 下载 TXT",
                            report.replace("###", "").replace("**", ""),
                            f"寻星日报_{datetime.now().strftime('%Y%m%d')}.txt",
-                           "text/plain", use_container_width=True)
+                           "text/plain", width="stretch")
 else:
     if not gen_btn:
         st.markdown("""

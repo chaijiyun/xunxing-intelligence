@@ -109,21 +109,21 @@ with tab1:
         etf_df = get_etf_list()
     if etf_df is not None and not etf_df.empty:
         show_cols = [c for c in ["代码", "名称", "最新价", "涨跌幅", "成交额"] if c in etf_df.columns]
-        st.dataframe(etf_df[show_cols] if show_cols else etf_df, use_container_width=True, height=350)
+        st.dataframe(etf_df[show_cols] if show_cols else etf_df, width="stretch", height=350)
 
 with tab2:
     with st.spinner("扫描行业异动..."):
         ind_df = get_industry_board()
     if ind_df is not None and not ind_df.empty:
         show_cols = [c for c in ["板块名称", "涨跌幅", "总市值", "换手率", "上涨家数", "下跌家数"] if c in ind_df.columns]
-        st.dataframe(ind_df[show_cols].head(30) if show_cols else ind_df.head(30), use_container_width=True, height=350)
+        st.dataframe(ind_df[show_cols].head(30) if show_cols else ind_df.head(30), width="stretch", height=350)
 
 with tab3:
     with st.spinner("扫描概念热度..."):
         con_df = get_concept_board()
     if con_df is not None and not con_df.empty:
         show_cols = [c for c in ["板块名称", "涨跌幅", "总市值", "换手率", "上涨家数", "下跌家数"] if c in con_df.columns]
-        st.dataframe(con_df[show_cols].head(20) if show_cols else con_df.head(20), use_container_width=True, height=350)
+        st.dataframe(con_df[show_cols].head(20) if show_cols else con_df.head(20), width="stretch", height=350)
 
 # 页脚
 st.caption(f"更新时间: {datetime.now().strftime('%H:%M:%S')} · 数据来源: AKShare · 仅供参考")

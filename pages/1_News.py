@@ -20,7 +20,7 @@ with col1:
     news_count = st.slider("采集数量", 10, 80, 40, step=10)
 with col2:
     st.write("")
-    fetch_btn = st.button("🔄 采集资讯", type="primary", use_container_width=True)
+    fetch_btn = st.button("🔄 采集资讯", type="primary", width="stretch")
 
 # Session state
 if "raw_news" not in st.session_state:
@@ -51,7 +51,7 @@ col_a1, col_a2 = st.columns([3, 1])
 with col_a1:
     st.subheader("🤖 AI 结构化分析")
 with col_a2:
-    analyze_btn = st.button("⚡ 运行AI分析", type="primary", use_container_width=True)
+    analyze_btn = st.button("⚡ 运行AI分析", type="primary", width="stretch")
 
 if analyze_btn:
     with st.spinner("🤖 DeepSeek 正在分析..."):

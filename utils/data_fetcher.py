@@ -1,6 +1,6 @@
 """
-数据采集模块 - AKShare + 财联社 + 东方财富
-优化：超时控制 + 错误隔离 + 缓存
+数据采集模块 - AKShare + 财联社 + 东方财富 + 新浪财经聚合
+军规级优化：全局超时控制(8秒) + 底层SSL证书修复 + 多源资讯聚合防断供
 """
 
 import akshare as ak
@@ -13,27 +13,44 @@ import concurrent.futures
 from datetime import datetime
 from bs4 import BeautifulSoup
 import streamlit as st
+import urllib3
+import certifi
+import shutil
+
+# 1. 屏蔽本地代理软件可能引发的 SSL 证书警告
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# 2. 修复 Python 路径含中文导致的底层 curl SSL 证书找不到的 Bug
+try:
+    safe_cert_path = os.path.join(os.getcwd(), "cacert.pem")
+    if not os.path.exists(safe_cert_path):
+        shutil.copy(certifi.where(), safe_cert_path)
+    os.environ["CURL_CA_BUNDLE"] = safe_cert_path
+    os.environ["REQUESTS_CA_BUNDLE"] = safe_cert_path
+except Exception as e:
+    print(f"[环境修复] SSL证书路径修复失败: {e}")
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
 os.makedirs(DATA_DIR, exist_ok=True)
 
 
-def _safe_call(func, timeout=20, default=None):
-    """带超时的安全调用，防止单个接口卡住整个页面"""
+def _safe_call(func, timeout=8, default=None):
+    """带超时的安全调用，防止单个接口卡住整个页面。统一缩短至 8 秒"""
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(func)
             return future.result(timeout=timeout)
     except concurrent.futures.TimeoutError:
+        print(f"[超时拦截] 某个数据接口请求超过 {timeout} 秒，已强制切断防止页面卡死。")
         return default
-    except Exception:
+    except Exception as e:
+        print(f"[接口报错] 数据获取异常: {str(e)}")
         return default
 
 
 # ============================================================
 # 1. 指数行情
 # ============================================================
-
 @st.cache_data(ttl=600, show_spinner=False)
 def get_major_indices() -> pd.DataFrame:
     """获取主要指数实时行情"""
@@ -50,14 +67,13 @@ def get_major_indices() -> pd.DataFrame:
                 result[c] = pd.to_numeric(result[c], errors="coerce")
         return result
 
-    result = _safe_call(_fetch, timeout=15, default=pd.DataFrame())
+    result = _safe_call(_fetch, timeout=8, default=pd.DataFrame())
     return result if result is not None else pd.DataFrame()
 
 
 # ============================================================
 # 2. 市场涨跌概况
 # ============================================================
-
 @st.cache_data(ttl=600, show_spinner=False)
 def get_market_overview() -> dict:
     """全A涨跌统计"""
@@ -81,14 +97,13 @@ def get_market_overview() -> dict:
             "上涨占比": round(up / total * 100, 1) if total else 0,
         }
 
-    result = _safe_call(_fetch, timeout=20, default={})
+    result = _safe_call(_fetch, timeout=8, default={})
     return result if result else {}
 
 
 # ============================================================
 # 3. 板块数据
 # ============================================================
-
 @st.cache_data(ttl=900, show_spinner=False)
 def get_industry_board() -> pd.DataFrame:
     """行业板块行情"""
@@ -101,7 +116,7 @@ def get_industry_board() -> pd.DataFrame:
             return df.sort_values("涨跌幅", ascending=False).reset_index(drop=True)
         return pd.DataFrame()
 
-    result = _safe_call(_fetch, timeout=15, default=pd.DataFrame())
+    result = _safe_call(_fetch, timeout=8, default=pd.DataFrame())
     return result if result is not None else pd.DataFrame()
 
 
@@ -117,52 +132,44 @@ def get_concept_board() -> pd.DataFrame:
             return df.sort_values("涨跌幅", ascending=False).reset_index(drop=True)
         return pd.DataFrame()
 
-    result = _safe_call(_fetch, timeout=15, default=pd.DataFrame())
+    result = _safe_call(_fetch, timeout=8, default=pd.DataFrame())
     return result if result is not None else pd.DataFrame()
 
 
 # ============================================================
 # 4. 宏观数据
 # ============================================================
-
 @st.cache_data(ttl=7200, show_spinner=False)
 def get_macro_data() -> dict:
     """关键宏观指标"""
-    macro = {}
+    def _fetch():
+        macro = {"CPI同比": "—", "制造业PMI": "—", "中国10Y国债": "—", "美国10Y国债": "—"}
+        try:
+            df = ak.macro_china_cpi_monthly()
+            if df is not None and not df.empty: macro["CPI同比"] = str(df.iloc[-1].iloc[-1])
+        except: pass
 
-    try:
-        df = ak.macro_china_cpi_monthly()
-        if df is not None and not df.empty:
-            macro["CPI同比"] = str(df.iloc[-1].iloc[-1])
-    except Exception:
-        macro["CPI同比"] = "—"
+        try:
+            df = ak.macro_china_pmi()
+            if df is not None and not df.empty: macro["制造业PMI"] = str(df.iloc[-1].iloc[-1])
+        except: pass
 
-    try:
-        df = ak.macro_china_pmi()
-        if df is not None and not df.empty:
-            macro["制造业PMI"] = str(df.iloc[-1].iloc[-1])
-    except Exception:
-        macro["制造业PMI"] = "—"
+        try:
+            df = ak.bond_zh_us_rate(start_date="20250101")
+            if df is not None and not df.empty:
+                latest = df.iloc[-1]
+                for col in df.columns:
+                    if "中国" in str(col) and "10" in str(col): macro["中国10Y国债"] = f"{latest[col]}%"
+                    if "美国" in str(col) and "10" in str(col): macro["美国10Y国债"] = f"{latest[col]}%"
+        except: pass
+        return macro
 
-    try:
-        df = ak.bond_zh_us_rate(start_date="20250101")
-        if df is not None and not df.empty:
-            latest = df.iloc[-1]
-            for col in df.columns:
-                if "中国" in str(col) and "10" in str(col):
-                    macro["中国10Y国债"] = f"{latest[col]}%"
-                if "美国" in str(col) and "10" in str(col):
-                    macro["美国10Y国债"] = f"{latest[col]}%"
-    except Exception:
-        pass
-
-    return macro
+    return _safe_call(_fetch, timeout=8, default={"CPI同比": "超时", "制造业PMI": "超时"})
 
 
 # ============================================================
 # 5. 市场风格
 # ============================================================
-
 @st.cache_data(ttl=600, show_spinner=False)
 def get_style_data() -> dict:
     """大小盘风格指标"""
@@ -179,86 +186,103 @@ def get_style_data() -> dict:
             }
         return {}
 
-    result = _safe_call(_fetch, timeout=15, default={})
+    result = _safe_call(_fetch, timeout=8, default={})
     return result if result else {}
 
 
 # ============================================================
-# 6. 财联社电报
+# 6. 财联社电报 (终极版：纯 AKShare 多源聚合，确保数量充足)
 # ============================================================
-
 @st.cache_data(ttl=300, show_spinner=False)
 def get_cls_telegraph(count: int = 50) -> list:
-    """财联社实时电报"""
+    """多源聚合资讯 - 确保获取到指定数量"""
     telegraphs = []
+    
+    # 1. 第一优先级：AKShare 官方维护的财联社接口 (最懂金融反爬)
     try:
-        url = "https://www.cls.cn/nodeapi/updateTelegraph"
-        params = {"app": "CailianpressWeb", "os": "web", "sv": "7.7.5", "rn": str(count)}
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Referer": "https://www.cls.cn/telegraph",
-        }
-        resp = requests.get(url, params=params, headers=headers, timeout=15)
-        if resp.status_code == 200:
-            items = resp.json().get("data", {}).get("roll_data", [])
-            for item in items:
-                content = item.get("content", "")
-                title = item.get("title", "") or content[:60]
-                # 清理HTML
-                for text_field in [content, title]:
-                    if "<" in text_field:
-                        try:
-                            text_field = BeautifulSoup(text_field, "lxml").get_text()
-                        except Exception:
-                            pass
-
-                ts = item.get("ctime", 0)
-                pub_time = datetime.fromtimestamp(ts).strftime("%H:%M") if ts else ""
-                important = item.get("level", "") == "B" or item.get("recommend", 0) > 0
+        df_cls = ak.stock_telegraph_cls()
+        if df_cls is not None and not df_cls.empty:
+            for _, row in df_cls.head(count).iterrows():
+                title = str(row.get("标题", ""))
+                content = str(row.get("内容", ""))
+                if not title and content: title = content[:60] + "..."
+                
+                time_val = str(row.get("发布时间", ""))
+                pub_time = time_val.split(" ")[-1][:5] if time_val else ""
 
                 telegraphs.append({
                     "time": pub_time,
-                    "title": BeautifulSoup(title, "lxml").get_text() if "<" in title else title,
-                    "content": BeautifulSoup(content, "lxml").get_text() if "<" in content else content,
-                    "important": important,
+                    "title": title,
+                    "content": content,
+                    "important": False,
                     "source": "财联社",
                 })
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[报错诊断] AKShare财联社获取失败: {e}")
 
-    # 备用: 东方财富快讯
-    if not telegraphs:
+    # 2. 第二优先级：如果财联社挂了，或者数量不够，用东方财富补齐
+    if len(telegraphs) < count:
         try:
-            df = ak.stock_news_em(symbol="全部")
-            if df is not None and not df.empty:
-                for _, row in df.head(count).iterrows():
-                    telegraphs.append({
-                        "time": str(row.get("发布时间", ""))[-8:],
-                        "title": str(row.get("新闻标题", "")),
-                        "content": str(row.get("新闻内容", ""))[:300],
-                        "important": False,
-                        "source": "东方财富",
-                    })
-        except Exception:
+            print(f"[状态] 资讯数量不足({len(telegraphs)}条)，正在使用东方财富补充...")
+            df_em = ak.stock_news_em(symbol="全部")
+            if df_em is not None and not df_em.empty:
+                remain_count = count - len(telegraphs)
+                for _, row in df_em.head(remain_count + 20).iterrows():
+                    if len(telegraphs) >= count: break
+                    t_title = str(row.get("新闻标题", ""))
+                    # 过滤重复新闻
+                    if t_title and not any(t_title in t["title"] for t in telegraphs):
+                        time_val = str(row.get("发布时间", ""))
+                        pub_time = time_val.split(" ")[-1][:5] if time_val else ""
+                        telegraphs.append({
+                            "time": pub_time,
+                            "title": t_title,
+                            "content": str(row.get("新闻内容", ""))[:300],
+                            "important": False,
+                            "source": "东方财富",
+                        })
+        except Exception as e:
+            print(f"[报错诊断] 东方财富补充失败: {e}")
+
+    # 3. 第三优先级：新浪财经 24 小时全球直播补底
+    if len(telegraphs) < count:
+        try:
+            print(f"[状态] 资讯数量仍不足({len(telegraphs)}条)，正在使用新浪财经补充...")
+            df_sina = ak.stock_info_global_sina()
+            if df_sina is not None and not df_sina.empty:
+                remain_count = count - len(telegraphs)
+                for _, row in df_sina.head(remain_count + 20).iterrows():
+                    if len(telegraphs) >= count: break
+                    t_title = str(row.get("标题", ""))
+                    if t_title and not any(t_title in t["title"] for t in telegraphs):
+                        time_val = str(row.get("发布时间", ""))
+                        pub_time = time_val.split(" ")[-1][:5] if time_val else ""
+                        telegraphs.append({
+                            "time": pub_time,
+                            "title": t_title,
+                            "content": str(row.get("内容", ""))[:300],
+                            "important": False,
+                            "source": "新浪财经",
+                        })
+        except Exception as e:
             pass
 
-    return telegraphs
+    return telegraphs[:count]
 
 
 # ============================================================
 # 7. ETF行情
 # ============================================================
-
 @st.cache_data(ttl=900, show_spinner=False)
 def get_etf_list() -> pd.DataFrame:
     """主要ETF行情"""
-    try:
+    def _fetch():
         df = ak.fund_etf_spot_em()
         if df is not None and not df.empty:
             for c in ["最新价", "涨跌幅", "成交额"]:
                 if c in df.columns:
                     df[c] = pd.to_numeric(df[c], errors="coerce")
             return df.head(50).reset_index(drop=True)
-    except Exception:
-        pass
-    return pd.DataFrame()
+        return pd.DataFrame()
+        
+    return _safe_call(_fetch, timeout=8, default=pd.DataFrame())

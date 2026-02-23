@@ -46,7 +46,7 @@ with col1:
 
     AI自动分类 · 情感分析 · 行业关联
     """)
-    st.page_link("pages/1_News.py", label="👉 进入资讯中心", icon="📰", use_container_width=True)
+    st.page_link("pages/1_News.py", label="👉 进入资讯中心", icon="📰", width="stretch")
 
 with col2:
     st.markdown("""
@@ -55,7 +55,7 @@ with col2:
 
     行业板块 · 宏观数据 · ETF
     """)
-    st.page_link("pages/2_Market.py", label="👉 进入市场总览", icon="📊", use_container_width=True)
+    st.page_link("pages/2_Market.py", label="👉 进入市场总览", icon="📊", width="stretch")
 
 with col3:
     st.markdown("""
@@ -64,7 +64,7 @@ with col3:
 
     配置建议 · 行业推荐 · 个股线索
     """)
-    st.page_link("pages/3_Report.py", label="👉 进入每日研报", icon="📝", use_container_width=True)
+    st.page_link("pages/3_Report.py", label="👉 进入每日研报", icon="📝", width="stretch")
 
 st.divider()
 
