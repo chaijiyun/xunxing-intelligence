@@ -1,0 +1,11 @@
+.streamlit/secrets.toml
+__pycache__/
+*.py[cod]
+data/*.json
+data/*.csv
+!data/.gitkeep
+.vscode/
+.idea/
+.DS_Store
+venv/
+.venv/
