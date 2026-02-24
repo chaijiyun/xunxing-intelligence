@@ -1,7 +1,6 @@
 """
 AI 分析模块 - DeepSeek API
 """
-
 import json
 import streamlit as st
 from datetime import datetime
@@ -14,7 +13,6 @@ def _get_api_key() -> str:
     except Exception:
         pass
     return ""
-
 
 def _call_deepseek(prompt: str, system: str = "", temperature: float = 0.3, max_tokens: int = 4000) -> str:
     """调用 DeepSeek V3"""
@@ -41,11 +39,9 @@ def _call_deepseek(prompt: str, system: str = "", temperature: float = 0.3, max_
     except Exception as e:
         return f"[AI调用失败: {e}]"
 
-
 # ============================================================
 # 资讯批量分析
 # ============================================================
-
 def analyze_news_batch(news_list: list) -> list:
     """批量分析资讯"""
     if not news_list:
@@ -55,7 +51,6 @@ def analyze_news_batch(news_list: list) -> list:
     if not api_key:
         return _keyword_analysis(news_list)
 
-    # 分批处理, 每批10条
     results = []
     batch_size = 10
     for i in range(0, len(news_list), batch_size):
@@ -87,9 +82,7 @@ def analyze_news_batch(news_list: list) -> list:
 
     return results
 
-
 def _parse_json(text: str):
-    """解析JSON响应"""
     if not text or text.startswith("[AI调用失败"):
         return None
     text = text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
@@ -105,19 +98,15 @@ def _parse_json(text: str):
                 pass
     return None
 
-
 def _keyword_analysis(news_list: list) -> list:
-    """无API时关键词分析"""
     pos_words = ["利好", "上涨", "增长", "突破", "超预期", "创新高", "支持", "扩大"]
     neg_words = ["利空", "下跌", "下降", "低于预期", "收缩", "暴跌", "收紧", "风险"]
-
     cat_map = {
         "宏观": ["GDP", "CPI", "PPI", "PMI", "央行", "降准", "降息", "利率", "MLF", "社融", "两会"],
         "海外": ["美联储", "美国", "欧洲", "美股", "美债", "美元", "关税"],
         "政策": ["工信部", "发改委", "证监会", "国务院", "政策", "规划", "监管"],
         "行业": ["半导体", "芯片", "AI", "人工智能", "机器人", "新能源", "医药", "军工"],
     }
-
     sec_map = {
         "半导体": ["半导体", "芯片", "晶圆"],
         "AI": ["AI", "人工智能", "大模型", "算力", "机器人"],
@@ -129,20 +118,15 @@ def _keyword_analysis(news_list: list) -> list:
 
     for item in news_list:
         text = item.get("title", "") + item.get("content", "")
-
-        # 分类
         category = "公司"
         for cat, kws in cat_map.items():
             if any(k in text for k in kws):
                 category = cat
                 break
 
-        # 情感
         pos = sum(1 for w in pos_words if w in text)
         neg = sum(1 for w in neg_words if w in text)
         sentiment = round(min(max((pos - neg) * 0.25, -1), 1), 2)
-
-        # 行业
         sectors = [s for s, kws in sec_map.items() if any(k in text for k in kws)]
 
         item["analysis"] = {
@@ -155,60 +139,64 @@ def _keyword_analysis(news_list: list) -> list:
 
     return news_list
 
-
-# ============================================================
-# 每日报告生成
-# ============================================================
-
 def generate_daily_report(market_text: str, news_text: str) -> str:
-    """生成每日综合报告"""
     api_key = _get_api_key()
     if not api_key:
-        return "⚠️ 未配置 DeepSeek API Key，无法生成AI报告。\n\n请在 Streamlit Cloud Settings > Secrets 中配置：\n```\nDEEPSEEK_API_KEY = \"sk-你的密钥\"\n```"
+        return "⚠️ 未配置 API Key。"
 
-    system = """你是「寻星配置跟踪系统」的AI投研顾问。用户是FOF管理人，同时做个人股票投资。
-要求：专业简洁、观点明确、可操作、含风险提示。"""
+    system = """你是「寻星资产配置公司」的首席投资官（CIO）兼AI投研中枢。
+    核心任务：为专业 FOF 管理人提供自上而下的资产配置决策。强调胜率与盈亏比，给出明确建议。"""
 
-    prompt = f"""基于以下数据生成{datetime.now().strftime('%Y年%m月%d日')}市场分析报告。
+    prompt = f"""基于以下客观数据，生成 {datetime.now().strftime('%Y年%m月%d日')} 寻星市场日报。
 
+【输入数据】
 {market_text}
-
 {news_text}
 
-报告框架：
-### 一、今日市场回顾
-### 二、宏观环境与大类资产配置方向
-（股票/债券/商品的配置倾向）
-### 三、市场风格研判
-（大盘vs小盘、成长vs价值）
-### 四、行业方向推荐
-（TOP3看好行业 + 回避行业）
-### 五、FOF配置建议
-（股票多头/量化/CTA/固收各自增减配建议）
-### 六、ETF配置推荐
-（3-5只ETF，含代码和逻辑）
-### 七、个股投资线索
-（3-5条机会，含催化剂）
-### 八、风险提示"""
-
+【报告框架要求】
+### 🔭 一、 市场异动与宏观定调
+### 🧭 二、 寻星大类资产配置时钟
+### 🧩 三、 FOF 底层策略调仓指南
+### 🎭 四、 A股结构与风格研判
+### 🎯 五、 寻星战术工具箱 (ETF与个股)
+### 🛡️ 六、 尾部风险与对冲预案
+"""
     return _call_deepseek(prompt, system, temperature=0.4, max_tokens=4000)
 
-
 def analyze_single_news(text: str) -> str:
-    """单条资讯深度分析"""
     api_key = _get_api_key()
     if not api_key:
         return "请先配置 DeepSeek API Key"
 
-    prompt = f"""深度分析以下财经资讯：
-
-{text}
-
-从以下维度分析：
-1. 事件定性
-2. 影响范围（行业/公司）
-3. 对股票/债券/商品的影响
-4. 持续性（短期or中长期）
-5. FOF配置和个人股票投资的应对建议"""
-
+    prompt = f"""深度分析以下资讯：\n{text}\n\n1.事件定性 2.影响范围 3.对资产影响 4.持续性 5.应对建议"""
     return _call_deepseek(prompt, temperature=0.3, max_tokens=2000)
+
+# ============================================================
+# 全局大势提炼 (核心主线提取)
+# ============================================================
+def summarize_market_threads(news_list: list) -> str:
+    """提取数百条新闻中的核心投资主线"""
+    api_key = _get_api_key()
+    if not api_key or not news_list:
+        return "⚠️ 未配置 API 密钥或无资讯数据。"
+
+    # 将所有新闻浓缩为纯文本
+    text_blocks = [f"- {n.get('title','')} {n.get('content','')[:50]}" for n in news_list]
+    news_text = "\n".join(text_blocks)
+
+    system = """你是寻星资产配置公司的 CIO。你的任务是从一堆碎片化资讯中，提炼出当前市场最具爆发力的投资主线。
+    绝不要流水账罗列新闻，必须寻找群体性、行业性或宏观级别的事件共振。"""
+
+    prompt = f"""基于以下 {len(news_list)} 条最新清洗后的市场资讯，为你提炼出当前市场最核心的 3 条投资主线或宏观异动。
+    
+    【格式要求】（直接输出 Markdown 格式）
+    ### 🔥 市场核心主线提炼
+    1. **[主线名称/板块]**：(一句话解释背后的催化剂事件)
+       - **配置思路**：(从FOF策略或ETF配置角度给出应对建议)
+    2. ... (以此类推，必须写满 3 条)
+
+    【输入资讯】
+    {news_text}
+    """
+    # 扩大 max_tokens 防止被截断
+    return _call_deepseek(prompt, system, temperature=0.3, max_tokens=2500)
