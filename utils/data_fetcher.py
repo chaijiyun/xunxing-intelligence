@@ -1360,6 +1360,558 @@ def pack_news_text(pack: dict) -> str:
     return "\n".join(np_list)
 
 
+# ============================================================
+# Q1. 行业资金流向 (Tushare PRO)
+# ============================================================
+@st.cache_data(ttl=600, show_spinner=False)
+def get_industry_moneyflow() -> pd.DataFrame:
+    """行业资金流向 — 识别资金主攻方向"""
+    def _tushare_fetch():
+        pro = _get_tushare_pro()
+        if not pro:
+            return None
+        try:
+            today = _last_trade_date()
+            df = pro.moneyflow_ind_dc(trade_date=today)
+            if df is None or df.empty:
+                for offset in range(1, 4):
+                    df = pro.moneyflow_ind_dc(trade_date=_last_trade_date(offset))
+                    if df is not None and not df.empty:
+                        break
+            if df is not None and not df.empty:
+                for c in ["net_amount", "buy_elg_amount", "buy_lg_amount",
+                           "buy_md_amount", "buy_sm_amount"]:
+                    if c in df.columns:
+                        df[c] = pd.to_numeric(df[c], errors="coerce")
+                df = df.sort_values("net_amount", ascending=False).reset_index(drop=True)
+                return df
+        except Exception as e:
+            logger.warning(f"[TS] 行业资金流向: {e}")
+        return None
+
+    return _safe_call(_tushare_fetch, timeout=15, default=pd.DataFrame(), label="行业资金流[TS]")
+
+
+# ============================================================
+# Q2. 个股日线行情 (Tushare PRO — 量化选股核心)
+# ============================================================
+@st.cache_data(ttl=300, show_spinner=False)
+def get_stock_daily(ts_code: str, days: int = 120) -> pd.DataFrame:
+    """获取单只股票日线行情"""
+    pro = _get_tushare_pro()
+    if not pro:
+        return pd.DataFrame()
+    try:
+        end = _last_trade_date()
+        start = (datetime.now() - timedelta(days=days * 1.5)).strftime("%Y%m%d")
+        df = pro.daily(ts_code=ts_code, start_date=start, end_date=end)
+        if df is not None and not df.empty:
+            df = df.sort_values("trade_date").reset_index(drop=True)
+            for c in ["open", "high", "low", "close", "vol", "amount", "pct_chg"]:
+                if c in df.columns:
+                    df[c] = pd.to_numeric(df[c], errors="coerce")
+            return df
+    except Exception as e:
+        logger.warning(f"[TS] 个股日线 {ts_code}: {e}")
+    return pd.DataFrame()
+
+
+# ============================================================
+# Q3. 个股资金流向 (Tushare PRO)
+# ============================================================
+@st.cache_data(ttl=600, show_spinner=False)
+def get_stock_moneyflow(ts_code: str, days: int = 20) -> pd.DataFrame:
+    """个股资金流向 — 主力/超大单/大单"""
+    pro = _get_tushare_pro()
+    if not pro:
+        return pd.DataFrame()
+    try:
+        end = _last_trade_date()
+        start = (datetime.now() - timedelta(days=days * 2)).strftime("%Y%m%d")
+        df = pro.moneyflow(ts_code=ts_code, start_date=start, end_date=end)
+        if df is not None and not df.empty:
+            df = df.sort_values("trade_date").reset_index(drop=True)
+            for c in df.columns:
+                if c != "trade_date" and c != "ts_code":
+                    df[c] = pd.to_numeric(df[c], errors="coerce")
+            return df
+    except Exception as e:
+        logger.warning(f"[TS] 个股资金流 {ts_code}: {e}")
+    return pd.DataFrame()
+
+
+# ============================================================
+# Q4. 全市场行情快照 (Tushare daily — 用于批量筛选)
+# ============================================================
+@st.cache_data(ttl=600, show_spinner=False)
+def get_market_snapshot() -> pd.DataFrame:
+    """全A股今日行情快照 — 量化选股的基础数据"""
+    def _tushare_fetch():
+        pro = _get_tushare_pro()
+        if not pro:
+            return None
+        try:
+            today = _last_trade_date()
+            df = pro.daily(trade_date=today)
+            if df is None or df.empty:
+                for offset in range(1, 4):
+                    df = pro.daily(trade_date=_last_trade_date(offset))
+                    if df is not None and not df.empty:
+                        break
+            if df is not None and not df.empty:
+                for c in ["open", "high", "low", "close", "pre_close",
+                           "change", "pct_chg", "vol", "amount"]:
+                    if c in df.columns:
+                        df[c] = pd.to_numeric(df[c], errors="coerce")
+                # 基础名称映射
+                try:
+                    basic = pro.stock_basic(exchange='', list_status='L',
+                                             fields='ts_code,symbol,name,industry,area')
+                    if basic is not None and not basic.empty:
+                        df = df.merge(basic[["ts_code", "name", "industry"]], on="ts_code", how="left")
+                except Exception:
+                    pass
+                return df
+        except Exception as e:
+            logger.warning(f"[TS] 全市场快照: {e}")
+        return None
+
+    def _akshare_fetch():
+        ak = _import_akshare()
+        if not ak:
+            return pd.DataFrame()
+        try:
+            df = ak.stock_zh_a_spot_em()
+            if df is not None and not df.empty:
+                for c in ["最新价", "涨跌幅", "涨跌额", "成交量", "成交额",
+                           "振幅", "换手率", "量比"]:
+                    if c in df.columns:
+                        df[c] = pd.to_numeric(df[c], errors="coerce")
+                return df
+        except Exception:
+            pass
+        return pd.DataFrame()
+
+    result = _safe_call(_tushare_fetch, timeout=20, default=None, label="市场快照[TS]")
+    if result is not None and not result.empty:
+        return result
+    logger.info("[降级] 市场快照 → AKShare")
+    return _safe_call(_akshare_fetch, timeout=15, default=pd.DataFrame(), label="市场快照[AK]")
+
+
+# ============================================================
+# Q5. 历史日线批量 (Tushare — 用于计算技术指标)
+# ============================================================
+@st.cache_data(ttl=600, show_spinner=False)
+def get_multi_stock_daily(ts_codes: list, days: int = 60) -> dict:
+    """批量获取多只股票日线 — 用于因子计算"""
+    pro = _get_tushare_pro()
+    if not pro:
+        return {}
+    result = {}
+    end = _last_trade_date()
+    start = (datetime.now() - timedelta(days=days * 1.5)).strftime("%Y%m%d")
+    for ts_code in ts_codes[:50]:  # 最多50只，避免API过载
+        try:
+            df = pro.daily(ts_code=ts_code, start_date=start, end_date=end)
+            if df is not None and not df.empty:
+                df = df.sort_values("trade_date").reset_index(drop=True)
+                for c in ["open", "high", "low", "close", "vol", "amount", "pct_chg"]:
+                    if c in df.columns:
+                        df[c] = pd.to_numeric(df[c], errors="coerce")
+                result[ts_code] = df
+        except Exception as e:
+            logger.warning(f"[TS] 日线 {ts_code}: {e}")
+    return result
+
+
+# ============================================================
+# Q6. 个股资金流向批量 (Tushare — 按日期获取全市场)
+# ============================================================
+@st.cache_data(ttl=600, show_spinner=False)
+def get_market_moneyflow(date: str = None) -> pd.DataFrame:
+    """全市场个股资金流向 — 按日期"""
+    pro = _get_tushare_pro()
+    if not pro:
+        return pd.DataFrame()
+    try:
+        if not date:
+            date = _last_trade_date()
+        df = pro.moneyflow(trade_date=date)
+        if df is None or df.empty:
+            for offset in range(1, 4):
+                df = pro.moneyflow(trade_date=_last_trade_date(offset))
+                if df is not None and not df.empty:
+                    break
+        if df is not None and not df.empty:
+            for c in df.columns:
+                if c not in ("trade_date", "ts_code"):
+                    df[c] = pd.to_numeric(df[c], errors="coerce")
+            return df
+    except Exception as e:
+        logger.warning(f"[TS] 全市场资金流: {e}")
+    return pd.DataFrame()
+
+
+# ============================================================
+# Q7. 量化因子计算引擎
+# ============================================================
+def calc_technical_factors(df: pd.DataFrame) -> dict:
+    """
+    基于日线数据计算技术因子
+    输入: 单只股票的日线 DataFrame (需含 close/high/low/vol/amount/pct_chg)
+    输出: 因子字典
+    """
+    if df is None or df.empty or len(df) < 20:
+        return {}
+
+    close = df["close"].values.astype(float)
+    high = df["high"].values.astype(float)
+    low = df["low"].values.astype(float)
+    vol = df["vol"].values.astype(float)
+    pct_chg = df["pct_chg"].values.astype(float) if "pct_chg" in df.columns else np.zeros(len(close))
+
+    factors = {}
+
+    # === 趋势动量 ===
+    if len(close) >= 5:
+        factors["动量_5日"] = round((close[-1] / close[-5] - 1) * 100, 2)
+    if len(close) >= 10:
+        factors["动量_10日"] = round((close[-1] / close[-10] - 1) * 100, 2)
+    if len(close) >= 20:
+        factors["动量_20日"] = round((close[-1] / close[-20] - 1) * 100, 2)
+    if len(close) >= 60:
+        factors["动量_60日"] = round((close[-1] / close[-60] - 1) * 100, 2)
+
+    # === 均线系统 ===
+    if len(close) >= 5:
+        ma5 = np.mean(close[-5:])
+        factors["MA5"] = round(ma5, 2)
+        factors["价格/MA5"] = round(close[-1] / ma5, 4)
+    if len(close) >= 10:
+        ma10 = np.mean(close[-10:])
+        factors["MA10"] = round(ma10, 2)
+    if len(close) >= 20:
+        ma20 = np.mean(close[-20:])
+        factors["MA20"] = round(ma20, 2)
+        factors["价格/MA20"] = round(close[-1] / ma20, 4)
+    if len(close) >= 60:
+        ma60 = np.mean(close[-60:])
+        factors["MA60"] = round(ma60, 2)
+        factors["价格/MA60"] = round(close[-1] / ma60, 4)
+
+    # MA5 > MA20 金叉
+    if "MA5" in factors and "MA20" in factors:
+        factors["均线多头"] = 1 if factors["MA5"] > factors["MA20"] else 0
+
+    # === MACD ===
+    if len(close) >= 35:
+        ema12 = _ema(close, 12)
+        ema26 = _ema(close, 26)
+        dif = ema12 - ema26
+        dea = _ema(dif, 9)
+        macd_bar = (dif - dea) * 2
+        factors["MACD_DIF"] = round(dif[-1], 3)
+        factors["MACD_DEA"] = round(dea[-1], 3)
+        factors["MACD柱"] = round(macd_bar[-1], 3)
+        factors["MACD金叉"] = 1 if dif[-1] > dea[-1] and dif[-2] <= dea[-2] else 0
+
+    # === RSI ===
+    if len(pct_chg) >= 14:
+        gains = np.where(pct_chg[-14:] > 0, pct_chg[-14:], 0)
+        losses = np.where(pct_chg[-14:] < 0, -pct_chg[-14:], 0)
+        avg_gain = np.mean(gains)
+        avg_loss = np.mean(losses)
+        if avg_loss > 0:
+            rs = avg_gain / avg_loss
+            factors["RSI_14"] = round(100 - 100 / (1 + rs), 1)
+        else:
+            factors["RSI_14"] = 100.0
+
+    # === 布林带 ===
+    if len(close) >= 20:
+        ma20 = np.mean(close[-20:])
+        std20 = np.std(close[-20:])
+        upper = ma20 + 2 * std20
+        lower = ma20 - 2 * std20
+        factors["布林上轨"] = round(upper, 2)
+        factors["布林下轨"] = round(lower, 2)
+        if upper != lower:
+            factors["布林位置"] = round((close[-1] - lower) / (upper - lower), 2)  # 0=下轨 1=上轨
+
+    # === ATR (波动率) ===
+    if len(close) >= 15:
+        tr = np.maximum(high[-14:] - low[-14:],
+                        np.maximum(abs(high[-14:] - close[-15:-1]),
+                                   abs(low[-14:] - close[-15:-1])))
+        atr14 = np.mean(tr)
+        factors["ATR_14"] = round(atr14, 2)
+        factors["ATR/价格%"] = round(atr14 / close[-1] * 100, 2)
+
+    # === 量价关系 ===
+    if len(vol) >= 20:
+        vol5 = np.mean(vol[-5:])
+        vol20 = np.mean(vol[-20:])
+        factors["量比_5/20"] = round(vol5 / vol20, 2) if vol20 > 0 else 1
+        factors["今日量比"] = round(vol[-1] / vol20, 2) if vol20 > 0 else 1
+    if len(vol) >= 5:
+        factors["5日均量"] = round(np.mean(vol[-5:]), 0)
+
+    # === 近N日新高/新低 ===
+    if len(high) >= 20:
+        factors["20日新高"] = 1 if close[-1] >= np.max(high[-20:]) * 0.98 else 0
+    if len(high) >= 60:
+        factors["60日新高"] = 1 if close[-1] >= np.max(high[-60:]) * 0.98 else 0
+    if len(low) >= 20:
+        factors["20日新低"] = 1 if close[-1] <= np.min(low[-20:]) * 1.02 else 0
+
+    # === 连涨/连跌天数 ===
+    if len(pct_chg) >= 2:
+        consecutive = 0
+        for i in range(len(pct_chg) - 1, -1, -1):
+            if pct_chg[i] > 0:
+                consecutive += 1
+            else:
+                break
+        factors["连涨天数"] = consecutive
+
+    return factors
+
+
+def _ema(data, period):
+    """指数移动平均"""
+    if len(data) < period:
+        return data
+    alpha = 2 / (period + 1)
+    result = np.zeros_like(data, dtype=float)
+    result[0] = data[0]
+    for i in range(1, len(data)):
+        result[i] = alpha * data[i] + (1 - alpha) * result[i - 1]
+    return result
+
+
+def calc_moneyflow_factors(mf_df: pd.DataFrame) -> dict:
+    """基于资金流向数据计算因子"""
+    if mf_df is None or mf_df.empty:
+        return {}
+    factors = {}
+    try:
+        # 最近一日
+        latest = mf_df.iloc[-1]
+        # 主力净流入 (超大单+大单)
+        buy_elg = float(latest.get("buy_elg_vol", 0))
+        sell_elg = float(latest.get("sell_elg_vol", 0))
+        buy_lg = float(latest.get("buy_lg_vol", 0))
+        sell_lg = float(latest.get("sell_lg_vol", 0))
+        net_main = (buy_elg - sell_elg + buy_lg - sell_lg)
+        factors["主力净流入"] = round(net_main, 0)
+
+        # 5日累计主力净流入
+        if len(mf_df) >= 5:
+            recent5 = mf_df.tail(5)
+            net5 = 0
+            for _, r in recent5.iterrows():
+                net5 += (float(r.get("buy_elg_vol", 0)) - float(r.get("sell_elg_vol", 0))
+                         + float(r.get("buy_lg_vol", 0)) - float(r.get("sell_lg_vol", 0)))
+            factors["主力净流入_5日"] = round(net5, 0)
+
+        # 超大单占比
+        total_vol = float(latest.get("buy_elg_vol", 0)) + float(latest.get("sell_elg_vol", 0))
+        total_all = float(latest.get("trade_count", 1)) if latest.get("trade_count") else 1
+        if total_all > 0:
+            factors["超大单占比"] = round(total_vol / max(total_all, 1) * 100, 1)
+
+        # 连续净流入天数
+        consecutive = 0
+        for i in range(len(mf_df) - 1, -1, -1):
+            r = mf_df.iloc[i]
+            net = (float(r.get("buy_elg_vol", 0)) - float(r.get("sell_elg_vol", 0))
+                   + float(r.get("buy_lg_vol", 0)) - float(r.get("sell_lg_vol", 0)))
+            if net > 0:
+                consecutive += 1
+            else:
+                break
+        factors["主力连续流入天数"] = consecutive
+
+    except Exception as e:
+        logger.warning(f"资金因子计算异常: {e}")
+    return factors
+
+
+# ============================================================
+# Q8. 多因子综合选股引擎
+# ============================================================
+def quant_stock_screener(
+    min_amount: float = 5000,    # 最低成交额(万)，过滤流动性不足
+    top_n: int = 30,             # 输出TOP N
+    factors_weight: dict = None, # 自定义因子权重
+) -> pd.DataFrame:
+    """
+    多因子量化选股引擎
+    流程:
+    1. 全市场快照 → 基础过滤 (ST/新股/流动性)
+    2. 批量获取日线 → 计算技术因子
+    3. 批量获取资金流向 → 计算资金因子
+    4. 多因子加权打分 → 排名输出 TOP N
+
+    默认因子权重:
+    - 动量_20日: 15%  (趋势强度)
+    - 量比_5/20: 15%  (量价配合)
+    - MACD金叉: 10%   (技术信号)
+    - 均线多头: 10%   (趋势确认)
+    - RSI_14: 10%     (动能, 50-80区间得分高)
+    - 主力净流入_5日: 20% (聪明钱)
+    - 主力连续流入天数: 10% (持续性)
+    - 20日新高: 10%   (突破信号)
+    """
+    if factors_weight is None:
+        factors_weight = {
+            "动量_20日": 0.15,
+            "量比_5/20": 0.15,
+            "MACD金叉": 0.10,
+            "均线多头": 0.10,
+            "RSI_14": 0.10,
+            "主力净流入_5日": 0.20,
+            "主力连续流入天数": 0.10,
+            "20日新高": 0.10,
+        }
+
+    # Step 1: 全市场快照
+    snapshot = get_market_snapshot()
+    if snapshot is None or snapshot.empty:
+        logger.warning("全市场快照为空")
+        return pd.DataFrame()
+
+    # 判断数据源 (Tushare vs AKShare 列名不同)
+    is_tushare = "ts_code" in snapshot.columns
+
+    if is_tushare:
+        # 过滤 ST + 新股 + 流动性
+        if "name" in snapshot.columns:
+            snapshot = snapshot[~snapshot["name"].str.contains("ST|退", na=False)]
+        snapshot = snapshot[snapshot["amount"] >= min_amount / 10]  # Tushare amount 千元
+        # 过滤北交所 (8开头)
+        snapshot = snapshot[~snapshot["ts_code"].str.startswith("8")]
+        # 过滤涨跌停 (无法买入)
+        if "pct_chg" in snapshot.columns:
+            snapshot = snapshot[(snapshot["pct_chg"] < 9.8) & (snapshot["pct_chg"] > -9.8)]
+        candidates = snapshot["ts_code"].tolist()
+    else:
+        # AKShare 格式
+        if "名称" in snapshot.columns:
+            snapshot = snapshot[~snapshot["名称"].str.contains("ST|退", na=False)]
+        if "成交额" in snapshot.columns:
+            snapshot = snapshot[snapshot["成交额"] >= min_amount * 1e4]
+        if "代码" in snapshot.columns:
+            snapshot = snapshot[~snapshot["代码"].astype(str).str.startswith("8")]
+        if "涨跌幅" in snapshot.columns:
+            snapshot = snapshot[(snapshot["涨跌幅"] < 9.8) & (snapshot["涨跌幅"] > -9.8)]
+        # 转换代码格式
+        if "代码" in snapshot.columns:
+            def _to_ts_code(code):
+                code = str(code).zfill(6)
+                if code.startswith("6"):
+                    return f"{code}.SH"
+                else:
+                    return f"{code}.SZ"
+            snapshot["ts_code"] = snapshot["代码"].apply(_to_ts_code)
+            candidates = snapshot["ts_code"].tolist()
+        else:
+            candidates = []
+
+    if not candidates:
+        logger.warning("无候选股票")
+        return pd.DataFrame()
+
+    # 取成交额 TOP 200 (避免API过载)
+    if is_tushare:
+        snapshot_sorted = snapshot.sort_values("amount", ascending=False)
+    else:
+        snapshot_sorted = snapshot.sort_values("成交额", ascending=False)
+    candidates = snapshot_sorted.head(200)["ts_code"].tolist()
+
+    logger.info(f"[选股] 候选池: {len(candidates)} 只")
+
+    # Step 2: 批量日线 + 技术因子
+    daily_data = get_multi_stock_daily(candidates[:50], days=80)
+
+    # Step 3: 全市场资金流向
+    mf_data = get_market_moneyflow()
+
+    # Step 4: 逐只计算因子并打分
+    scored = []
+    for ts_code in candidates[:50]:
+        row = {"ts_code": ts_code}
+
+        # 名称
+        match = snapshot[snapshot["ts_code"] == ts_code]
+        if not match.empty:
+            if is_tushare:
+                row["名称"] = match.iloc[0].get("name", "")
+                row["行业"] = match.iloc[0].get("industry", "")
+                row["涨跌幅"] = float(match.iloc[0].get("pct_chg", 0))
+                row["成交额万"] = round(float(match.iloc[0].get("amount", 0)) / 10, 0)
+            else:
+                row["名称"] = match.iloc[0].get("名称", "")
+                row["行业"] = ""
+                row["涨跌幅"] = float(match.iloc[0].get("涨跌幅", 0))
+                row["成交额万"] = round(float(match.iloc[0].get("成交额", 0)) / 1e4, 0)
+
+        # 技术因子
+        tech_factors = {}
+        if ts_code in daily_data:
+            tech_factors = calc_technical_factors(daily_data[ts_code])
+
+        # 资金因子
+        money_factors = {}
+        if mf_data is not None and not mf_data.empty:
+            stock_mf = mf_data[mf_data["ts_code"] == ts_code]
+            if not stock_mf.empty:
+                money_factors = calc_moneyflow_factors(stock_mf)
+
+        all_factors = {**tech_factors, **money_factors}
+        row.update(all_factors)
+
+        # 综合打分
+        score = 0
+        for factor_name, weight in factors_weight.items():
+            val = all_factors.get(factor_name, 0)
+            if factor_name == "动量_20日":
+                # 正动量得分高, 标准化到0-100
+                score += weight * min(max((val + 10) / 30 * 100, 0), 100)
+            elif factor_name == "量比_5/20":
+                score += weight * min(max(val * 50, 0), 100)
+            elif factor_name in ("MACD金叉", "均线多头", "20日新高"):
+                score += weight * (val * 100)
+            elif factor_name == "RSI_14":
+                # RSI 50-80 得分高
+                if 50 <= val <= 80:
+                    score += weight * 100
+                elif 40 <= val < 50:
+                    score += weight * 60
+                elif val > 80:
+                    score += weight * 30  # 超买扣分
+                else:
+                    score += weight * 20
+            elif factor_name == "主力净流入_5日":
+                score += weight * min(max((val + 5000) / 10000 * 100, 0), 100)
+            elif factor_name == "主力连续流入天数":
+                score += weight * min(val * 20, 100)
+            else:
+                score += weight * min(max(val, 0), 100)
+
+        row["综合得分"] = round(score, 1)
+        scored.append(row)
+
+    if not scored:
+        return pd.DataFrame()
+
+    result = pd.DataFrame(scored)
+    result = result.sort_values("综合得分", ascending=False).head(top_n).reset_index(drop=True)
+    result.index = result.index + 1  # 排名从1开始
+    return result
+
+
 # 兼容旧接口
 def get_cls_telegraph(count: int = 50) -> list:
     return get_all_news(tushare_count=max(count, 80))
