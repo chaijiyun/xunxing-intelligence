@@ -210,7 +210,9 @@ if result is not None and not result.empty:
             st.markdown("**📊 得分分布**")
             if len(result) >= 3:
                 score_bins = pd.cut(result["综合得分"], bins=5)
-                st.bar_chart(score_bins.value_counts().sort_index(), height=250)
+                dist = score_bins.value_counts().sort_index()
+                dist.index = [str(x) for x in dist.index]
+                st.bar_chart(dist, height=250)
 
     # ============================================================
     # Phase 3: AI 深度点评 (可选)
