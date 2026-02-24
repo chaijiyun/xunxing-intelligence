@@ -1,23 +1,33 @@
 """
-📰 资讯中心 - 实时采集与AI分析
+📰 资讯雷达 V3 - Tushare PRO 8源并行 + AI 分析
+================================================================
+数据源: 财联社/第一财经/华尔街见闻/东财/同花顺/新浪/金融界/云财经 + 新闻联播
+================================================================
 """
 import streamlit as st
 import pandas as pd
 import sys, os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from utils.data_fetcher import get_cls_telegraph
-from utils.ai_analyzer import analyze_news_batch, analyze_single_news
+from utils.data_fetcher import get_all_news, _tushare_available, TUSHARE_NEWS_SOURCES
+from utils.ai_analyzer import analyze_news_batch, analyze_single_news, summarize_market_threads
 
-st.set_page_config(page_title="资讯中心", page_icon="📰", layout="wide")
-st.title("📰 资讯中心")
-st.caption("实时财经资讯采集 + AI 结构化分析 (内置三级漏斗过滤)")
+st.set_page_config(page_title="资讯雷达", page_icon="📰", layout="wide")
+st.title("📰 资讯雷达")
+
+# 状态提示
+if _tushare_available():
+    src_names = [f"{name}" for _, name, _, _ in TUSHARE_NEWS_SOURCES]
+    st.caption(f"Tushare PRO 8源并行: {' · '.join(src_names)} + 新闻联播")
+else:
+    st.warning("⚠️ Tushare PRO 未配置，仅使用新浪快讯 (数据质量有限)")
 st.divider()
 
-# 控制面板 (修改：最大支持 300 条极限获取)
+# 控制面板
 col1, col2 = st.columns([3, 1])
 with col1:
-    news_count = st.slider("采集数量 (过滤后纯净资讯)", 10, 300, 80, step=10)
+    news_count = st.slider("采集目标数量 (去重后)", 50, 200, 120, step=10,
+                           help="从8个源并行采集，去重过滤后输出指定数量的高价值资讯")
 with col2:
     st.write("")
     fetch_btn = st.button("🔄 采集资讯", type="primary", use_container_width=True)
@@ -30,39 +40,55 @@ if "analyzed_news" not in st.session_state:
 
 # 采集
 if fetch_btn or not st.session_state.raw_news:
-    with st.spinner(f"📡 正在从底层数据库抓取并过滤 {news_count} 条纯净资讯..."):
-        news = get_cls_telegraph(news_count)
+    with st.spinner(f"📡 正在从 8 个新闻源并行采集并去重过滤..."):
+        news = get_all_news(tushare_count=news_count)
         st.session_state.raw_news = news
         st.session_state.analyzed_news = []
     if news:
-        st.success(f"✅ 成功提取 {len(news)} 条高价值资讯 (已过滤噪音及超额海外新闻)")
+        # 来源统计
+        src_counts = {}
+        cat_counts = {}
+        important_count = 0
+        for n in news:
+            src = n.get("source", "未知")
+            src_counts[src] = src_counts.get(src, 0) + 1
+            cat = n.get("category", "未知")
+            cat_counts[cat] = cat_counts.get(cat, 0) + 1
+            if n.get("important"):
+                important_count += 1
+
+        st.success(f"✅ 采集完成 {len(news)} 条高价值资讯 (重要 {important_count} 条)")
+
+        # 来源分布
+        with st.container(border=True):
+            src_cols = st.columns(min(len(src_counts), 6))
+            for i, (src, cnt) in enumerate(sorted(src_counts.items(), key=lambda x: -x[1])):
+                src_cols[i % len(src_cols)].metric(src, f"{cnt}条")
+
     else:
-        st.warning("未能采集到资讯，请稍后重试")
+        st.warning("未采集到资讯，请检查 Tushare Token 配置")
 
 raw_news = st.session_state.raw_news
-
 if not raw_news:
     st.info("点击「采集资讯」按钮开始")
     st.stop()
 
 # ============================================================
-# AI分析面板 (新增全局主线提炼按钮)
+# AI 分析面板
 # ============================================================
 st.divider()
 col_a1, col_a2, col_a3 = st.columns([2, 1, 1])
 with col_a1:
-    st.subheader("🤖 AI 结构化分析与主线提炼")
+    st.subheader("🤖 AI 分析引擎")
 with col_a2:
-    analyze_btn = st.button("⚡ 逐条深度拆解", type="secondary", use_container_width=True)
+    analyze_btn = st.button("⚡ 逐条结构化分析", type="secondary", use_container_width=True)
 with col_a3:
     summarize_btn = st.button("🔥 一键提炼核心主线", type="primary", use_container_width=True)
 
-# 1. 执行全局主线提炼
+# 核心主线提炼
 if summarize_btn:
-    with st.spinner(f"🤖 DeepSeek 正在鸟瞰 {len(raw_news)} 条全局资讯，寻找主线脉络..."):
-        from utils.ai_analyzer import summarize_market_threads
+    with st.spinner(f"🤖 DeepSeek 正在分析 {len(raw_news)} 条多源资讯，提炼投资主线..."):
         threads_report = summarize_market_threads(raw_news)
-        
         st.markdown("""
         <div style="padding:16px 20px; border-radius:10px;
         background: linear-gradient(135deg, rgba(255,107,53,0.1), rgba(69,183,209,0.05));
@@ -71,9 +97,9 @@ if summarize_btn:
         st.markdown(threads_report)
         st.markdown("</div>", unsafe_allow_html=True)
 
-# 2. 执行逐条拆解
+# 逐条分析
 if analyze_btn:
-    with st.spinner("🤖 DeepSeek 正在逐条结构化分析..."):
+    with st.spinner(f"🤖 DeepSeek 正在逐条分析 {len(raw_news)} 条资讯..."):
         analyzed = analyze_news_batch(raw_news)
         st.session_state.analyzed_news = analyzed
         st.success(f"✅ 完成 {len(analyzed)} 条结构化分析")
@@ -87,9 +113,7 @@ if analyzed:
     st.divider()
     st.subheader("📊 分析统计")
 
-    cats = {}
-    sents = []
-    all_secs = {}
+    cats, sents, all_secs = {}, [], {}
     for item in analyzed:
         a = item.get("analysis", {})
         cat = a.get("category", "其他")
@@ -104,12 +128,11 @@ if analyzed:
 
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("资讯总数", f"{len(analyzed)}")
-    sentiment_label = "偏多🟢" if avg_s > 0.1 else ("偏空🔴" if avg_s < -0.1 else "中性⚪")
-    m2.metric("整体情绪", f"{avg_s:.2f}", sentiment_label)
+    label = "偏多🟢" if avg_s > 0.1 else ("偏空🔴" if avg_s < -0.1 else "中性⚪")
+    m2.metric("整体情绪", f"{avg_s:.2f}", label)
     m3.metric("利多", f"{pos_n}条")
     m4.metric("利空", f"{neg_n}条")
 
-    # 分类 & 行业
     cc1, cc2 = st.columns(2)
     with cc1:
         st.markdown("**分类分布**")
@@ -123,12 +146,22 @@ if analyzed:
     st.divider()
     st.subheader("📋 资讯列表")
 
-    filter_cat = st.multiselect("按分类筛选", list(cats.keys()), default=list(cats.keys()))
-    sort_opt = st.radio("排序", ["时间", "影响等级↓", "情感↓"], horizontal=True)
+    # 筛选
+    col_f1, col_f2, col_f3 = st.columns([2, 2, 1])
+    with col_f1:
+        filter_cat = st.multiselect("按分类筛选", list(cats.keys()), default=list(cats.keys()))
+    with col_f2:
+        # 按来源筛选
+        all_sources = list(set(item.get("source", "") for item in analyzed))
+        filter_src = st.multiselect("按来源筛选", all_sources, default=all_sources)
+    with col_f3:
+        sort_opt = st.radio("排序", ["时间", "影响↓", "情感↓"], horizontal=True)
 
-    filtered = [item for item in analyzed if item.get("analysis", {}).get("category", "其他") in filter_cat]
+    filtered = [item for item in analyzed
+                if item.get("analysis", {}).get("category", "其他") in filter_cat
+                and item.get("source", "") in filter_src]
 
-    if sort_opt == "影响等级↓":
+    if sort_opt == "影响↓":
         filtered.sort(key=lambda x: x.get("analysis", {}).get("impact", 0), reverse=True)
     elif sort_opt == "情感↓":
         filtered.sort(key=lambda x: x.get("analysis", {}).get("sentiment", 0), reverse=True)
@@ -138,15 +171,20 @@ if analyzed:
         s = a.get("sentiment", 0)
         emoji = "🟢" if s > 0.2 else ("🔴" if s < -0.2 else "⚪")
         sectors_str = " ".join(f"`{sec}`" for sec in a.get("sectors", []))
+        src = item.get("source", "")
+        tier = item.get("tier", "")
+        tier_badge = {"T0": "🏛️", "T1": "🔷", "T2": "🔹", "T3": "▫️"}.get(tier, "")
 
-        st.markdown(f"**{item.get('time','')}** · {a.get('category','')} · {emoji} {s:+.2f} · {'⭐'*a.get('impact',1)}")
+        st.markdown(f"**{item.get('time','')}** · {tier_badge}**[{src}]** · {a.get('category','')} · {emoji} {s:+.2f} · {'⭐'*a.get('impact',1)}")
         st.markdown(f"> {item.get('title','')}")
-        if sectors_str: st.caption(f"关联行业: {sectors_str}")
+        if sectors_str:
+            st.caption(f"关联行业: {sectors_str}")
 
         with st.expander("详情 & 深度分析", expanded=False):
             st.markdown(item.get("content", "")[:500])
-            if a.get("summary"): st.info(f"AI摘要: {a['summary']}")
-            if st.button(f"🔍 深度分析", key=f"d_{i}"):
+            if a.get("summary"):
+                st.info(f"AI摘要: {a['summary']}")
+            if st.button(f"🔍 FOF视角深度分析", key=f"d_{i}"):
                 with st.spinner("分析中..."):
                     result = analyze_single_news(f"{item.get('title','')}\n{item.get('content','')}")
                     st.markdown(result)
@@ -154,6 +192,21 @@ if analyzed:
 
 else:
     st.subheader("📋 原始资讯")
-    st.info("💡 点击「🔥 一键提炼核心主线」或「⚡ 逐条深度拆解」启用 AI 引擎")
+    st.info("💡 点击「🔥 一键提炼核心主线」或「⚡ 逐条结构化分析」启用 AI 引擎")
+
+    # 按分类分组展示
+    cat_groups = {}
     for item in raw_news:
-        st.markdown(f"**{item.get('time','')}** · {item.get('source','')} · {item.get('title','')}")
+        cat = item.get("category", "综合财经")
+        if cat not in cat_groups:
+            cat_groups[cat] = []
+        cat_groups[cat].append(item)
+
+    for cat, items in cat_groups.items():
+        with st.expander(f"📂 {cat} ({len(items)}条)", expanded=(cat in ("宏观政策", "行业产业"))):
+            for item in items:
+                src = item.get("source", "")
+                important = "⭐ " if item.get("important") else ""
+                tier = item.get("tier", "")
+                tier_badge = {"T0": "🏛️", "T1": "🔷", "T2": "🔹", "T3": "▫️"}.get(tier, "")
+                st.markdown(f"**{item.get('time','')}** · {tier_badge}**[{src}]** · {important}{item.get('title','')}")
