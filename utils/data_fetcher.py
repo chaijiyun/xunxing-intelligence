@@ -1,6 +1,6 @@
 """
 数据采集模块 - 寻星情报中心专属原生直连引擎
-军规级优化：全局超时控制(8秒) + 三级清洗漏斗(去噪/限流) + 原生API直连
+军规级优化：全局超时控制 + 三级清洗漏斗 + 原生API直连 + 自动翻页引擎
 """
 import akshare as ak
 import pandas as pd
@@ -46,7 +46,7 @@ def _safe_call(func, timeout=8, default=None):
         return default
 
 # ============================================================
-# 1-5 行情概况与宏观等基础函数 (保留原有优化)
+# 1-5 行情概况与宏观等基础函数
 # ============================================================
 @st.cache_data(ttl=600, show_spinner=False)
 def get_major_indices() -> pd.DataFrame:
@@ -137,11 +137,11 @@ def get_style_data() -> dict:
     return _safe_call(_fetch, timeout=8, default={})
 
 # ============================================================
-# 6. 资讯中心 (升级版：300条宽口径 + 去噪限流漏斗)
+# 6. 资讯中心 (完全体：多页滚动提取 + 三级去噪漏斗)
 # ============================================================
 @st.cache_data(ttl=300, show_spinner=False)
 def get_cls_telegraph(count: int = 50) -> list:
-    """资讯直连：带三级漏斗过滤"""
+    """自动翻页获取，确保经过严格清洗后依然能达到指定数量"""
     telegraphs = []
     
     # 【漏斗规则配置】
@@ -151,70 +151,77 @@ def get_cls_telegraph(count: int = 50) -> list:
     
     overseas_limit = int(count * 0.3)
     overseas_current = 0
-    fetch_target = count * 4 # 为了凑齐最高 300 条纯净资讯，我们要向底层要 1200 条作为原材料池
 
-    # 1. 新浪财经原生底层
+    # 1. 新浪财经原生底层 (支持翻页，最多翻 6 页)
     try:
-        url = f"https://zhibo.sina.com.cn/api/zhibo/feed?page=1&page_size={fetch_target}&zhibo_id=152&tag_id=0&dire=f&dpc=1"
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0"}
-        resp = requests.get(url, headers=headers, timeout=12, verify=False)
-        if resp.status_code == 200:
-            items = resp.json().get("result", {}).get("data", {}).get("feed", {}).get("list", [])
-            for item in items:
-                if len(telegraphs) >= count: break
-                rich_text = item.get("rich_text", "")
-                if not rich_text: continue
-                
-                title = ""
-                content = rich_text
-                if "】" in rich_text and rich_text.startswith("【"):
-                    parts = rich_text.split("】", 1)
-                    title = parts[0].replace("【", "").strip()
-                    content = parts[1].strip() if len(parts) > 1 else title
-                else:
-                    title = content[:60] + "..."
-                
-                full_text = title + content
-                # 第一级：过滤垃圾噪音
-                if any(w in full_text for w in noise_words): continue
-                # 第二级：控制海外新闻占比 (防霸屏)
-                if any(w in full_text for w in overseas_words):
-                    if overseas_current >= overseas_limit: continue
-                    overseas_current += 1
-
-                time_str = item.get("create_time", "")
-                pub_time = time_str.split(" ")[1][:5] if " " in time_str else time_str
-                
-                telegraphs.append({"time": pub_time, "title": title, "content": content, "important": False, "source": "新浪财经"})
-    except Exception as e:
-        print(f"[报错诊断] 新浪原生接口直连失败: {e}")
-
-    # 2. 东方财富原生底层补底
-    if len(telegraphs) < count:
-        print(f"[状态] 资讯不足，启用东财补底...")
-        try:
-            url = f"https://fast-infoapi.eastmoney.com/api/news/list?client=web&biz=live&pageSize={fetch_target}&pageIndex=1"
-            headers = {"User-Agent": "Mozilla/5.0"}
-            resp = requests.get(url, headers=headers, timeout=10, verify=False)
+        for page in range(1, 7):
+            if len(telegraphs) >= count: break
+            url = f"https://zhibo.sina.com.cn/api/zhibo/feed?page={page}&page_size=200&zhibo_id=152&tag_id=0&dire=f&dpc=1"
+            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0"}
+            resp = requests.get(url, headers=headers, timeout=5, verify=False)
+            
             if resp.status_code == 200:
-                items = resp.json().get("data", [])
+                items = resp.json().get("result", {}).get("data", {}).get("feed", {}).get("list", [])
+                if not items: break # 到底了
+                
                 for item in items:
                     if len(telegraphs) >= count: break
-                    t_title = item.get("title", "")
-                    content = item.get("digest", "") or t_title
-                    full_text = t_title + content
+                    rich_text = item.get("rich_text", "")
+                    if not rich_text: continue
                     
-                    if not t_title or any(t_title in t["title"] for t in telegraphs): continue
+                    title = ""
+                    content = rich_text
+                    if "】" in rich_text and rich_text.startswith("【"):
+                        parts = rich_text.split("】", 1)
+                        title = parts[0].replace("【", "").strip()
+                        content = parts[1].strip() if len(parts) > 1 else title
+                    else:
+                        title = content[:60] + "..."
+                    
+                    full_text = title + content
+                    # 漏斗清洗
                     if any(w in full_text for w in noise_words): continue
                     if any(w in full_text for w in overseas_words):
                         if overseas_current >= overseas_limit: continue
                         overseas_current += 1
 
-                    time_str = item.get("showTime", "")
+                    time_str = item.get("create_time", "")
                     pub_time = time_str.split(" ")[1][:5] if " " in time_str else time_str
-                    telegraphs.append({"time": pub_time, "title": t_title, "content": content, "important": False, "source": "东方财富"})
+                    
+                    telegraphs.append({"time": pub_time, "title": title, "content": content, "important": False, "source": "新浪财经"})
+    except Exception as e:
+        print(f"[报错诊断] 新浪原生接口多页抓取失败: {e}")
+
+    # 2. 东方财富原生底层补底 (同样支持翻页)
+    if len(telegraphs) < count:
+        try:
+            for page in range(1, 6):
+                if len(telegraphs) >= count: break
+                url = f"https://fast-infoapi.eastmoney.com/api/news/list?client=web&biz=live&pageSize=100&pageIndex={page}"
+                headers = {"User-Agent": "Mozilla/5.0"}
+                resp = requests.get(url, headers=headers, timeout=5, verify=False)
+                
+                if resp.status_code == 200:
+                    items = resp.json().get("data", [])
+                    if not items: break
+                    
+                    for item in items:
+                        if len(telegraphs) >= count: break
+                        t_title = item.get("title", "")
+                        content = item.get("digest", "") or t_title
+                        full_text = t_title + content
+                        
+                        if not t_title or any(t_title in t["title"] for t in telegraphs): continue
+                        if any(w in full_text for w in noise_words): continue
+                        if any(w in full_text for w in overseas_words):
+                            if overseas_current >= overseas_limit: continue
+                            overseas_current += 1
+
+                        time_str = item.get("showTime", "")
+                        pub_time = time_str.split(" ")[1][:5] if " " in time_str else time_str
+                        telegraphs.append({"time": pub_time, "title": t_title, "content": content, "important": False, "source": "东方财富"})
         except Exception as e:
-            print(f"[报错诊断] 东财原生接口直连失败: {e}")
+            print(f"[报错诊断] 东财原生接口多页抓取失败: {e}")
 
     return telegraphs[:count]
 
