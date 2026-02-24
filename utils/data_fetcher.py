@@ -1,16 +1,16 @@
 """
-数据采集模块 - 寻星情报中心专属原生直连引擎
-军规级优化：全局超时控制 + 三级清洗漏斗 + 原生API直连 + 自动翻页引擎
+数据采集模块 - 寻星情报中心 (双擎版)
+包含：AKShare 行情数据 + Tushare PRO 机构级资讯接口
 """
 import akshare as ak
+import tushare as ts
 import pandas as pd
 import requests
 import json
 import time
 import os
 import concurrent.futures
-from datetime import datetime
-from bs4 import BeautifulSoup
+from datetime import datetime, timedelta
 import streamlit as st
 import urllib3
 import certifi
@@ -46,7 +46,21 @@ def _safe_call(func, timeout=8, default=None):
         return default
 
 # ============================================================
-# 1-5 行情概况与宏观等基础函数
+# Tushare 初始化配置
+# ============================================================
+def _get_tushare_pro():
+    """获取并初始化 Tushare Pro 接口"""
+    try:
+        token = st.secrets.get("TUSHARE_TOKEN", "")
+        if token:
+            ts.set_token(token)
+            return ts.pro_api()
+    except Exception as e:
+        print(f"[Tushare 错误] 初始化失败: {e}")
+    return None
+
+# ============================================================
+# 1-5 行情概况与宏观等基础函数 (AKShare 提供)
 # ============================================================
 @st.cache_data(ttl=600, show_spinner=False)
 def get_major_indices() -> pd.DataFrame:
@@ -137,13 +151,18 @@ def get_style_data() -> dict:
     return _safe_call(_fetch, timeout=8, default={})
 
 # ============================================================
-# 6. 资讯中心 (完全体：多页滚动提取 + 三级去噪漏斗)
+# 6. 资讯中心 (Tushare PRO 机构专线版 + 漏斗清洗)
 # ============================================================
 @st.cache_data(ttl=300, show_spinner=False)
 def get_cls_telegraph(count: int = 50) -> list:
-    """自动翻页获取，确保经过严格清洗后依然能达到指定数量"""
+    """使用 Tushare PRO 获取标准化资讯，自带漏斗清洗"""
     telegraphs = []
+    pro = _get_tushare_pro()
     
+    if not pro:
+        st.warning("⚠️ 尚未配置 TUSHARE_TOKEN 或 Token 无效")
+        return []
+
     # 【漏斗规则配置】
     noise_words = ["互动平台", "互动易", "晚会", "抽奖", "投资者关系", "提醒", "交易提示", 
                    "停牌", "复牌", "新股申购", "原油API", "EIA", "美联储官员", "美联储理事", "公告", "大宗交易", "调研信息"]
@@ -151,77 +170,67 @@ def get_cls_telegraph(count: int = 50) -> list:
     
     overseas_limit = int(count * 0.3)
     overseas_current = 0
+    fetch_target = count * 4  # 宽口径拿数据
 
-    # 1. 新浪财经原生底层 (支持翻页，最多翻 6 页)
     try:
-        for page in range(1, 7):
-            if len(telegraphs) >= count: break
-            url = f"https://zhibo.sina.com.cn/api/zhibo/feed?page={page}&page_size=200&zhibo_id=152&tag_id=0&dire=f&dpc=1"
-            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0"}
-            resp = requests.get(url, headers=headers, timeout=5, verify=False)
-            
-            if resp.status_code == 200:
-                items = resp.json().get("result", {}).get("data", {}).get("feed", {}).get("list", [])
-                if not items: break # 到底了
+        # Tushare 需要时间区间，我们默认拉取过去3天，防止周末没资讯
+        now = datetime.now()
+        start_time = (now - timedelta(days=3)).strftime('%Y-%m-%d %H:%M:%S')
+        end_time = now.strftime('%Y-%m-%d %H:%M:%S')
+
+        # 1. Tushare 专线：新浪源
+        df_sina = pro.news(src='sina', start_date=start_time, end_date=end_time, limit=fetch_target)
+        if df_sina is not None and not df_sina.empty:
+            for _, row in df_sina.iterrows():
+                if len(telegraphs) >= count: break
                 
-                for item in items:
+                title = str(row.get('title', ''))
+                content = str(row.get('content', ''))
+                if content == 'nan' or not content: content = title
+                if title == 'nan' or not title: title = content[:60] + "..."
+                
+                full_text = title + content
+                
+                # 漏斗清洗
+                if any(w in full_text for w in noise_words): continue
+                if any(w in full_text for w in overseas_words):
+                    if overseas_current >= overseas_limit: continue
+                    overseas_current += 1
+
+                # 提取时间格式，从 "2026-02-24 14:30:00" 变成 "14:30"
+                time_str = str(row.get('datetime', ''))
+                pub_time = time_str.split(" ")[1][:5] if " " in time_str else time_str
+                
+                telegraphs.append({"time": pub_time, "title": title, "content": content, "important": False, "source": "新浪(TS)"})
+
+        # 2. Tushare 专线补底：东财富源
+        if len(telegraphs) < count:
+            df_em = pro.news(src='eastmoney', start_date=start_time, end_date=end_time, limit=fetch_target)
+            if df_em is not None and not df_em.empty:
+                for _, row in df_em.iterrows():
                     if len(telegraphs) >= count: break
-                    rich_text = item.get("rich_text", "")
-                    if not rich_text: continue
                     
-                    title = ""
-                    content = rich_text
-                    if "】" in rich_text and rich_text.startswith("【"):
-                        parts = rich_text.split("】", 1)
-                        title = parts[0].replace("【", "").strip()
-                        content = parts[1].strip() if len(parts) > 1 else title
-                    else:
-                        title = content[:60] + "..."
+                    title = str(row.get('title', ''))
+                    content = str(row.get('content', ''))
+                    if content == 'nan' or not content: content = title
+                    if title == 'nan' or not title: continue
                     
                     full_text = title + content
-                    # 漏斗清洗
+                    
+                    # 查重与漏斗清洗
+                    if any(title in t["title"] for t in telegraphs): continue
                     if any(w in full_text for w in noise_words): continue
                     if any(w in full_text for w in overseas_words):
                         if overseas_current >= overseas_limit: continue
                         overseas_current += 1
 
-                    time_str = item.get("create_time", "")
+                    time_str = str(row.get('datetime', ''))
                     pub_time = time_str.split(" ")[1][:5] if " " in time_str else time_str
                     
-                    telegraphs.append({"time": pub_time, "title": title, "content": content, "important": False, "source": "新浪财经"})
+                    telegraphs.append({"time": pub_time, "title": title, "content": content, "important": False, "source": "东财(TS)"})
+
     except Exception as e:
-        print(f"[报错诊断] 新浪原生接口多页抓取失败: {e}")
-
-    # 2. 东方财富原生底层补底 (同样支持翻页)
-    if len(telegraphs) < count:
-        try:
-            for page in range(1, 6):
-                if len(telegraphs) >= count: break
-                url = f"https://fast-infoapi.eastmoney.com/api/news/list?client=web&biz=live&pageSize=100&pageIndex={page}"
-                headers = {"User-Agent": "Mozilla/5.0"}
-                resp = requests.get(url, headers=headers, timeout=5, verify=False)
-                
-                if resp.status_code == 200:
-                    items = resp.json().get("data", [])
-                    if not items: break
-                    
-                    for item in items:
-                        if len(telegraphs) >= count: break
-                        t_title = item.get("title", "")
-                        content = item.get("digest", "") or t_title
-                        full_text = t_title + content
-                        
-                        if not t_title or any(t_title in t["title"] for t in telegraphs): continue
-                        if any(w in full_text for w in noise_words): continue
-                        if any(w in full_text for w in overseas_words):
-                            if overseas_current >= overseas_limit: continue
-                            overseas_current += 1
-
-                        time_str = item.get("showTime", "")
-                        pub_time = time_str.split(" ")[1][:5] if " " in time_str else time_str
-                        telegraphs.append({"time": pub_time, "title": t_title, "content": content, "important": False, "source": "东方财富"})
-        except Exception as e:
-            print(f"[报错诊断] 东财原生接口多页抓取失败: {e}")
+        print(f"[报错诊断] Tushare专线获取失败: {e}")
 
     return telegraphs[:count]
 
