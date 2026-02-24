@@ -1,20 +1,71 @@
 """
-寻星市场情报中心 V2 - 主页
+寻星市场情报中心 V4 - 主页
+================================================================
+V4: 登录认证 + Tushare PRO 优先 + 桥水式驾驶舱 + CIO日报严谨升级
+================================================================
 """
 import streamlit as st
 from datetime import datetime
 
 st.set_page_config(page_title="寻星市场情报中心", page_icon="🔭", layout="wide")
 
+
+# ============================================================
+# 登录认证
+# ============================================================
+def check_login():
+    """简单登录认证"""
+    if st.session_state.get("authenticated"):
+        return True
+
+    st.markdown("""
+    <div style="display:flex; justify-content:center; align-items:center; min-height:55vh;">
+    <div style="width:400px; padding:40px; border-radius:16px;
+    background: linear-gradient(135deg, rgba(255,107,53,0.08), rgba(69,183,209,0.04));
+    border: 1px solid rgba(255,107,53,0.15); text-align:center;">
+    <h1 style="margin:0 0 8px;">🔭</h1>
+    <h2 style="margin:0 0 4px; color:#FF6B35;">寻星市场情报中心</h2>
+    <p style="margin:0 0 24px; color:#888; font-size:14px;">Xunxing Market Intelligence · V4</p>
+    </div></div>
+    """, unsafe_allow_html=True)
+
+    col_l, col_c, col_r = st.columns([1, 1.5, 1])
+    with col_c:
+        with st.form("login_form"):
+            username = st.text_input("用户名", placeholder="请输入用户名")
+            password = st.text_input("密码", type="password", placeholder="请输入密码")
+            submit = st.form_submit_button("🔐 登录", use_container_width=True, type="primary")
+            if submit:
+                valid_user = "admin"
+                valid_pass = "281699"
+                try:
+                    valid_user = st.secrets.get("LOGIN_USER", "admin")
+                    valid_pass = st.secrets.get("LOGIN_PASS", "281699")
+                except Exception:
+                    pass
+                if username == valid_user and password == valid_pass:
+                    st.session_state.authenticated = True
+                    st.session_state.login_user = username
+                    st.rerun()
+                else:
+                    st.error("❌ 用户名或密码错误")
+    return False
+
+
+if not check_login():
+    st.stop()
+
+# ============================================================
 # 侧边栏
+# ============================================================
 with st.sidebar:
     st.title("🔭 寻星情报中心")
-    st.caption("Xunxing Market Intelligence · V3")
+    st.caption("Xunxing Market Intelligence · V4")
     st.divider()
     st.markdown(f"📅 {datetime.now().strftime('%Y-%m-%d %A')}")
+    st.markdown(f"👤 {st.session_state.get('login_user', 'admin')}")
     st.divider()
 
-    # DeepSeek API 状态
     api_key = ""
     try:
         api_key = st.secrets.get("DEEPSEEK_API_KEY", "")
@@ -24,35 +75,36 @@ with st.sidebar:
         st.success("🤖 AI引擎: DeepSeek ✅")
     else:
         st.warning("🤖 AI引擎: 未配置")
-        st.caption("Secrets 中配置 DEEPSEEK_API_KEY")
 
-    # Tushare PRO 状态
     ts_token = ""
     try:
         ts_token = st.secrets.get("TUSHARE_TOKEN", "")
     except Exception:
         pass
     if ts_token:
-        st.success("📡 数据源: Tushare PRO ✅")
+        st.success("📡 主数据源: Tushare PRO ✅")
     else:
-        st.warning("📡 数据源: 仅 AKShare + 新浪")
-        st.caption("Secrets 中配置 TUSHARE_TOKEN 升级数据质量")
+        st.warning("📡 数据源: 仅 AKShare (降级)")
 
     st.divider()
+    if st.button("🚪 退出登录", use_container_width=True):
+        st.session_state.authenticated = False
+        st.rerun()
     st.caption("⚠️ 仅供参考，不构成投资建议")
 
+# ============================================================
 # 主页
+# ============================================================
 st.title("🔭 寻星市场情报中心")
-st.markdown("**Xunxing Market Intelligence Center** · V3 · FOF CIO 决策平台")
+st.markdown("**Xunxing Market Intelligence Center** · V4 · FOF CIO 决策平台")
 st.divider()
 
-# 导航卡片
 col1, col2, col3 = st.columns(3)
 
 with col1:
     st.markdown("""
     ### 📰 资讯雷达
-    Tushare PRO 新闻 + 新浪快讯
+    Tushare PRO 8源并行 + 新闻联播
 
     AI分类 · 情感分析 · 核心主线提炼
     """)
@@ -61,62 +113,55 @@ with col1:
 with col2:
     st.markdown("""
     ### 📊 FOF 驾驶舱
-    宏观 · 风格 · 资金 · 期货 · 板块
+    桥水式宏观仪表盘 · 全维度市场扫描
 
-    北向资金 · 融资融券 · 券商研报 · ETF
+    增长/通胀/流动性/信用 · 波动率 · 情绪
     """)
     st.page_link("pages/2_Market.py", label="👉 进入驾驶舱", icon="📊", use_container_width=True)
 
 with col3:
     st.markdown("""
     ### 📝 CIO 日报
-    AI 综合配置报告
+    AI 综合配置报告 · 全量数据驱动
 
-    大类配置 · FOF策略权重 · 行业 · ETF
+    大类配置 · FOF策略权重 · 行业 · 风控
     """)
     st.page_link("pages/3_Report.py", label="👉 进入 CIO 日报", icon="📝", use_container_width=True)
 
 st.divider()
 
-# V2 升级说明
-with st.expander("🆕 V3 升级内容", expanded=False):
+with st.expander("🆕 V4 升级内容", expanded=False):
     st.markdown("""
-**数据源升级 (V3 新增)**
-- ✅ Tushare PRO 券商研报: 评级变动 + 目标价
-- ✅ 融资融券余额: 杠杆情绪监控
-- ✅ 商品期货行情: 黄金/原油/铜/螺纹钢等 (CTA策略参考)
-- ✅ 人民币汇率追踪
-- ✅ 全量数据打包引擎 (12个数据模块一次性采集)
+**V4 核心升级**
+- ✅ 登录认证系统 (可通过 Secrets 自定义凭据)
+- ✅ **Tushare PRO 优先** → AKShare 降级兜底 数据架构
+- ✅ 桥水式宏观仪表盘: 增长/通胀/流动性/信用 四维框架
+- ✅ 波动率指标 · 市场宽度 · 情绪温度计 · 信用利差
+- ✅ 风格动量扩展至20日中期趋势
+- ✅ CIO 日报数据严谨性升级 (15+ 数据维度全量输入)
+- ✅ 新闻采集优化: 默认150条 · 时间衰减权重
 
-**AI 分析升级**
-- ✅ FOF CIO 专用 Prompt 框架 — 强制输出结构化配置比例
-- ✅ 大类资产权重 (权益/固收/商品/现金 = 100%)
-- ✅ FOF策略权重 (多头/指增500/指增1000/中性/CTA/套利/固收+ = 100%)
-- ✅ 环境-策略适配逻辑 (趋势市/震荡市/高波动 → 策略偏好)
-- ✅ 券商研报动态纳入 AI 分析输入
-
-**架构优化**
-- ✅ 驾驶舱新增: 资金流向面板 + 商品期货面板 + 券商研报Tab
-- ✅ 数据打包→文本转化→AI生成 三段式流水线
-- ✅ Tushare PRO 连接状态实时监测
+**V3 已有功能**
+- ✅ 8源新闻并行采集 + 新闻联播
+- ✅ 融资融券 / 北向资金 / 商品期货
+- ✅ 券商研报评级 · FOF策略权重 · 大类配置
     """)
 
 with st.expander("⚙️ 部署配置指南"):
     st.markdown("""
-**必选: DeepSeek API (AI分析引擎)**
+**必选: DeepSeek API**
 ```toml
 DEEPSEEK_API_KEY = "sk-你的密钥"
 ```
-
-**强烈推荐: Tushare PRO (主力数据源)**
-1. 注册 [tushare.pro](https://tushare.pro/)
-2. 获取 Token (个人主页 → 接口TOKEN)
-3. Streamlit Cloud → Settings → Secrets:
+**必选: Tushare PRO**
 ```toml
 TUSHARE_TOKEN = "你的token"
 ```
-
-**数据源**: AKShare(免费) + Tushare PRO(推荐) + 新浪快讯(备用)
+**可选: 登录凭据 (默认 admin/281699)**
+```toml
+LOGIN_USER = "admin"
+LOGIN_PASS = "281699"
+```
     """)
 
-st.caption("💡 **首次加载**: 海外服务器访问国内数据源需10-30秒，缓存后会快很多。")
+st.caption("💡 首次加载需10-30秒，缓存后会快很多。")

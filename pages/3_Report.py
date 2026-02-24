@@ -1,7 +1,7 @@
 """
-📝 CIO 日报 - FOF 配置决策中心
+📝 CIO 日报 V4 - FOF 配置决策中心
 ================================================================
-升级 V3: 使用数据打包 + FOF 专业 Prompt + 结构化配置输出
+V4: 全量数据驱动 + 数据质量审计 + 桥水四维框架
 ================================================================
 """
 import streamlit as st
@@ -12,13 +12,20 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.data_fetcher import (
-    get_daily_data_pack, pack_market_text, pack_news_text, _tushare_available,
+    get_daily_data_pack, pack_market_text, pack_news_text,
+    _tushare_available, get_sentiment_temperature,
 )
 from utils.ai_analyzer import generate_daily_report
 
 st.set_page_config(page_title="CIO 日报", page_icon="📝", layout="wide")
+
+if not st.session_state.get("authenticated"):
+    st.warning("请先登录")
+    st.page_link("app.py", label="🔐 返回登录", icon="🏠")
+    st.stop()
+
 st.title("📝 寻星 CIO 日报")
-st.caption("AI 综合分析 · 大类配置 · FOF 策略权重 · 行业方向 · 个股线索")
+st.caption("AI 全量数据驱动 · 桥水四维宏观 · 大类配置 · FOF策略 · 风控预案")
 st.divider()
 
 # ============================================================
@@ -40,17 +47,17 @@ with col_s1:
         st.error("🤖 DeepSeek AI: 未配置")
 with col_s2:
     if has_tushare:
-        st.success("📡 Tushare PRO: 已连接")
+        st.success("📡 Tushare PRO: 已连接 (主力数据源)")
     else:
-        st.warning("📡 Tushare PRO: 未配置 (资讯将使用新浪降级源)")
+        st.warning("📡 Tushare PRO: 未配置 (降级至 AKShare)")
 
 if not has_api:
     st.warning("""
-⚠️ **未配置 DeepSeek API Key** — 研报需要 AI 能力
+⚠️ **未配置 DeepSeek API Key** — CIO 日报需要 AI
 
 1. 注册 [platform.deepseek.com](https://platform.deepseek.com/)
-2. 创建 API Key，充值10元
-3. Streamlit Cloud → Settings → Secrets 添加：
+2. 创建 API Key
+3. Streamlit Cloud → Settings → Secrets:
 ```
 DEEPSEEK_API_KEY = "sk-你的密钥"
 ```
@@ -80,10 +87,10 @@ def save_cache(data):
 
 cached = load_cache()
 if cached:
-    st.info(f"📄 已有今日缓存报告（{cached.get('time', '')}）· 数据源: {cached.get('data_sources', 'unknown')}")
+    st.info(f"📄 已有今日缓存（{cached.get('time', '')}）· 数据维度: {cached.get('data_dimensions', '?')} · 数据源: {cached.get('data_sources', '?')}")
 
 # ============================================================
-# 操作按钮
+# 按钮
 # ============================================================
 c1, c2 = st.columns(2)
 with c1:
@@ -100,49 +107,101 @@ if gen_btn and has_api:
     progress = st.progress(0, "准备中...")
 
     # Stage 1: 全量数据采集
-    progress.progress(10, "📡 采集行情 + 宏观 + 资金流向 + 期货...")
+    progress.progress(10, "📡 采集全量数据: 行情+宏观+流动性+信用+波动率+资金+期货+资讯+研报...")
     data_pack = get_daily_data_pack()
 
-    # 显示采集状态
-    sources_status = []
+    # 数据质量审计
+    data_audit = []
+    dim_count = 0
     if data_pack.get("indices") is not None and not data_pack["indices"].empty:
-        sources_status.append("✅指数")
+        data_audit.append("✅指数")
+        dim_count += 1
+    else:
+        data_audit.append("❌指数")
     if data_pack.get("overview"):
-        sources_status.append("✅涨跌")
+        data_audit.append("✅涨跌")
+        dim_count += 1
+    else:
+        data_audit.append("❌涨跌")
     if data_pack.get("macro"):
-        sources_status.append("✅宏观")
+        data_audit.append(f"✅宏观({len(data_pack['macro'])}项)")
+        dim_count += 1
+    else:
+        data_audit.append("❌宏观")
+    if data_pack.get("liquidity"):
+        data_audit.append(f"✅流动性({len(data_pack['liquidity'])}项)")
+        dim_count += 1
+    else:
+        data_audit.append("⚠️流动性(缺)")
+    if data_pack.get("credit"):
+        data_audit.append("✅信用")
+        dim_count += 1
+    else:
+        data_audit.append("⚠️信用(缺)")
+    if data_pack.get("style"):
+        data_audit.append(f"✅风格({len(data_pack['style'])}项)")
+        dim_count += 1
+    else:
+        data_audit.append("❌风格")
+    if data_pack.get("volatility"):
+        data_audit.append("✅波动率")
+        dim_count += 1
+    else:
+        data_audit.append("⚠️波动率(缺)")
     if data_pack.get("northbound"):
-        sources_status.append("✅北向")
+        data_audit.append("✅北向")
+        dim_count += 1
+    else:
+        data_audit.append("⚠️北向(缺)")
     if data_pack.get("margin"):
-        sources_status.append("✅融资")
+        data_audit.append("✅融资")
+        dim_count += 1
+    else:
+        data_audit.append("⚠️融资(缺)")
     if data_pack.get("futures"):
-        sources_status.append("✅期货")
+        data_audit.append(f"✅期货({len(data_pack['futures'])}品种)")
+        dim_count += 1
+    else:
+        data_audit.append("⚠️期货(缺)")
     if data_pack.get("news"):
-        sources_status.append(f"✅资讯({len(data_pack['news'])}条)")
+        data_audit.append(f"✅资讯({len(data_pack['news'])}条)")
+        dim_count += 1
+    else:
+        data_audit.append("❌资讯")
     if data_pack.get("research"):
-        sources_status.append(f"✅研报({len(data_pack['research'])}条)")
+        data_audit.append(f"✅研报({len(data_pack['research'])}条)")
+        dim_count += 1
+    else:
+        data_audit.append("⚠️研报(缺)")
 
-    progress.progress(40, f"📊 数据采集完成: {' '.join(sources_status)}")
+    progress.progress(40, f"📊 数据审计完成: {dim_count}/12 维度 | {' '.join(data_audit)}")
 
-    # Stage 2: 数据打包为文本
-    progress.progress(50, "📦 数据打包...")
+    # Stage 2: 数据打包
+    progress.progress(50, "📦 数据打包 (桥水四维 + 全量市场)...")
     market_text = pack_market_text(data_pack)
     news_text = pack_news_text(data_pack)
 
-    # Stage 3: AI 生成报告
-    progress.progress(60, "🤖 DeepSeek 正在生成 CIO 配置报告...")
+    # 显示数据输入规模
+    total_chars = len(market_text) + len(news_text)
+    st.caption(f"📏 AI 输入规模: 市场数据 {len(market_text)} 字 + 资讯 {len(news_text)} 字 = {total_chars} 字")
+
+    # Stage 3: AI 生成
+    progress.progress(60, "🤖 DeepSeek 正在生成 CIO 配置报告 (桥水四维框架)...")
     report = generate_daily_report(market_text, news_text)
 
     # Stage 4: 保存
     progress.progress(90, "💾 保存...")
-    data_sources = "Tushare+AKShare+新浪" if has_tushare else "AKShare+新浪"
+    data_sources = "Tushare PRO (主) + AKShare (辅)" if has_tushare else "AKShare"
     save_cache({
         "time": datetime.now().strftime("%H:%M"),
         "report": report,
         "data_sources": data_sources,
-        "market_text_preview": market_text[:500],
+        "data_dimensions": dim_count,
+        "data_audit": data_audit,
+        "market_text_preview": market_text[:800],
         "news_count": len(data_pack.get("news", [])),
         "research_count": len(data_pack.get("research", [])),
+        "input_chars": total_chars,
     })
 
     progress.progress(100, "✅ 完成!")
@@ -157,21 +216,17 @@ elif load_btn and cached:
 if report:
     st.divider()
 
-    # 报告头
     st.markdown(f"""
 <div style="padding:16px 20px; border-radius:10px;
 background: linear-gradient(135deg, rgba(255,107,53,0.12), rgba(69,183,209,0.06));
 border: 1px solid rgba(255,107,53,0.25); margin-bottom:20px;">
 <h2 style="margin:0; color:#FF6B35;">🔭 寻星 FOF CIO 日报</h2>
-<p style="margin:4px 0 0; color:#999;">{datetime.now().strftime('%Y年%m月%d日')} · DeepSeek V3 · 数据源: {'Tushare PRO + AKShare' if has_tushare else 'AKShare + 新浪'}</p>
+<p style="margin:4px 0 0; color:#999;">{datetime.now().strftime('%Y年%m月%d日')} · DeepSeek V3 · 桥水四维框架 · 数据源: {'Tushare PRO + AKShare' if has_tushare else 'AKShare'}</p>
 </div>""", unsafe_allow_html=True)
 
-    # 报告正文
     st.markdown(report)
-
     st.divider()
 
-    # 下载
     c1, c2 = st.columns(2)
     with c1:
         st.download_button(
@@ -190,11 +245,15 @@ border: 1px solid rgba(255,107,53,0.25); margin-bottom:20px;">
             use_container_width=True,
         )
 
-    # 数据诊断折叠面板
-    with st.expander("🔍 本次报告数据诊断"):
+    with st.expander("🔍 数据质量审计"):
         if cached:
-            st.markdown(f"- 资讯条数: {cached.get('news_count', '?')}")
-            st.markdown(f"- 研报条数: {cached.get('research_count', '?')}")
+            st.markdown(f"- 数据维度: **{cached.get('data_dimensions', '?')}/12**")
+            audit = cached.get("data_audit", [])
+            if audit:
+                st.markdown(f"- 详情: {' | '.join(audit)}")
+            st.markdown(f"- 资讯: {cached.get('news_count', '?')} 条")
+            st.markdown(f"- 研报: {cached.get('research_count', '?')} 条")
+            st.markdown(f"- AI输入: {cached.get('input_chars', '?')} 字")
             st.markdown(f"- 数据源: {cached.get('data_sources', '?')}")
             if cached.get("market_text_preview"):
                 st.text(cached["market_text_preview"])
@@ -202,26 +261,22 @@ border: 1px solid rgba(255,107,53,0.25); margin-bottom:20px;">
 else:
     if not gen_btn:
         st.markdown("""
-### 📋 报告包含以下决策模块
+### 📋 V4 报告包含以下决策模块
 
-| 模块 | 内容 | 对应你的需求 |
-|------|------|-------------|
-| **一、宏观周期判断** | 复苏/过热/滞胀/衰退定性 | 大类资产方向的理论基础 |
-| **二、大类资产配置** | 权益/固收/商品/现金具体比例 | 股票、债券、商品的配置权重 |
-| **三、FOF策略配置** | 7项策略具体比例(合计100%) | 多头/指增/中性/CTA/套利/固收+ |
-| **四、风格与行业** | 大小盘+成长价值+TOP3行业 | 市场风格方向+行业方向 |
-| **五、战术工具箱** | ETF代码+个股线索 | 具体的执行工具 |
-| **六、风险预警** | 3大风险+对冲建议 | 防御配置和尾部风险管理 |
+| 模块 | 内容 | 数据依据 |
+|------|------|---------|
+| **一、宏观周期** | 桥水四维: 增长/通胀/流动性/信用 | PMI/CPI/PPI/M2/Shibor/社融/信用利差 |
+| **二、大类配置** | 权益/固收/商品/现金 = 100% | 宏观周期定位 + 美林时钟 |
+| **三、FOF策略** | 7策略权重 = 100% | 波动率/风格/量能 → 策略适配 |
+| **四、风格行业** | 大小盘+成长价值+TOP3行业 | 5日+20日动量 + 资金流向 |
+| **五、工具箱** | ETF代码 + 个股线索 | 行业催化剂 + 研报评级 |
+| **六、风险预警** | 3大风险 + 对冲预案 | 波动率 + 情绪温度 + 资金 |
+| **七、数据自检** | 数据完整性审计 | 12维数据覆盖率 |
 
 👆 点击 **「生成新报告」** 开始
 
----
-
-**💡 数据源说明**:
-- **Tushare PRO** (已配置✅): 财经新闻、新闻联播、券商研报评级、融资融券
-- **AKShare** (免费): A股行情、指数、板块、ETF、宏观数据、北向资金、期货
-- **新浪快讯** (补充): 盘中异动实时快讯
+**数据架构**: Tushare PRO (主) → AKShare (降级兜底) · 12+ 数据维度全量输入
         """)
 
 st.divider()
-st.caption(f"寻星配置跟踪系统 · v3.0 · {datetime.now().strftime('%H:%M:%S')}")
+st.caption(f"寻星配置跟踪系统 · V4 · {datetime.now().strftime('%H:%M:%S')}")

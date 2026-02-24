@@ -1,7 +1,5 @@
 """
-📰 资讯雷达 V3 - Tushare PRO 8源并行 + AI 分析
-================================================================
-数据源: 财联社/第一财经/华尔街见闻/东财/同花顺/新浪/金融界/云财经 + 新闻联播
+📰 资讯雷达 V4 - Tushare PRO 8源并行 + AI 分析
 ================================================================
 """
 import streamlit as st
@@ -13,26 +11,31 @@ from utils.data_fetcher import get_all_news, _tushare_available, TUSHARE_NEWS_SO
 from utils.ai_analyzer import analyze_news_batch, analyze_single_news, summarize_market_threads
 
 st.set_page_config(page_title="资讯雷达", page_icon="📰", layout="wide")
+
+# 登录检查
+if not st.session_state.get("authenticated"):
+    st.warning("请先登录")
+    st.page_link("app.py", label="🔐 返回登录", icon="🏠")
+    st.stop()
+
 st.title("📰 资讯雷达")
 
-# 状态提示
 if _tushare_available():
     src_names = [f"{name}" for _, name, _, _ in TUSHARE_NEWS_SOURCES]
-    st.caption(f"Tushare PRO 8源并行: {' · '.join(src_names)} + 新闻联播")
+    st.caption(f"Tushare PRO 8源: {' · '.join(src_names)} + 新闻联播")
 else:
-    st.warning("⚠️ Tushare PRO 未配置，仅使用新浪快讯 (数据质量有限)")
+    st.warning("⚠️ Tushare PRO 未配置，仅使用新浪快讯 (降级模式)")
 st.divider()
 
 # 控制面板
 col1, col2 = st.columns([3, 1])
 with col1:
-    news_count = st.slider("采集目标数量 (去重后)", 50, 200, 120, step=10,
-                           help="从8个源并行采集，去重过滤后输出指定数量的高价值资讯")
+    news_count = st.slider("采集目标数量 (去重后)", 50, 300, 150, step=10,
+                           help="从8个源并行采集，去重过滤后输出高价值资讯")
 with col2:
     st.write("")
     fetch_btn = st.button("🔄 采集资讯", type="primary", use_container_width=True)
 
-# Session state
 if "raw_news" not in st.session_state:
     st.session_state.raw_news = []
 if "analyzed_news" not in st.session_state:
@@ -45,7 +48,6 @@ if fetch_btn or not st.session_state.raw_news:
         st.session_state.raw_news = news
         st.session_state.analyzed_news = []
     if news:
-        # 来源统计
         src_counts = {}
         cat_counts = {}
         important_count = 0
@@ -59,12 +61,10 @@ if fetch_btn or not st.session_state.raw_news:
 
         st.success(f"✅ 采集完成 {len(news)} 条高价值资讯 (重要 {important_count} 条)")
 
-        # 来源分布
         with st.container(border=True):
             src_cols = st.columns(min(len(src_counts), 6))
             for i, (src, cnt) in enumerate(sorted(src_counts.items(), key=lambda x: -x[1])):
                 src_cols[i % len(src_cols)].metric(src, f"{cnt}条")
-
     else:
         st.warning("未采集到资讯，请检查 Tushare Token 配置")
 
@@ -85,7 +85,6 @@ with col_a2:
 with col_a3:
     summarize_btn = st.button("🔥 一键提炼核心主线", type="primary", use_container_width=True)
 
-# 核心主线提炼
 if summarize_btn:
     with st.spinner(f"🤖 DeepSeek 正在分析 {len(raw_news)} 条多源资讯，提炼投资主线..."):
         threads_report = summarize_market_threads(raw_news)
@@ -97,7 +96,6 @@ if summarize_btn:
         st.markdown(threads_report)
         st.markdown("</div>", unsafe_allow_html=True)
 
-# 逐条分析
 if analyze_btn:
     with st.spinner(f"🤖 DeepSeek 正在逐条分析 {len(raw_news)} 条资讯..."):
         analyzed = analyze_news_batch(raw_news)
@@ -146,12 +144,10 @@ if analyzed:
     st.divider()
     st.subheader("📋 资讯列表")
 
-    # 筛选
     col_f1, col_f2, col_f3 = st.columns([2, 2, 1])
     with col_f1:
         filter_cat = st.multiselect("按分类筛选", list(cats.keys()), default=list(cats.keys()))
     with col_f2:
-        # 按来源筛选
         all_sources = list(set(item.get("source", "") for item in analyzed))
         filter_src = st.multiselect("按来源筛选", all_sources, default=all_sources)
     with col_f3:
@@ -194,7 +190,6 @@ else:
     st.subheader("📋 原始资讯")
     st.info("💡 点击「🔥 一键提炼核心主线」或「⚡ 逐条结构化分析」启用 AI 引擎")
 
-    # 按分类分组展示
     cat_groups = {}
     for item in raw_news:
         cat = item.get("category", "综合财经")
