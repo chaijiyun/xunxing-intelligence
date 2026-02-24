@@ -1,6 +1,6 @@
 """
 数据采集模块 - 寻星情报中心 (双擎版)
-包含：AKShare 行情数据 + Tushare PRO 机构级资讯接口
+包含：AKShare 行情数据 + Tushare PRO 机构级多源资讯接口
 """
 import akshare as ak
 import tushare as ts
@@ -151,11 +151,11 @@ def get_style_data() -> dict:
     return _safe_call(_fetch, timeout=8, default={})
 
 # ============================================================
-# 6. 资讯中心 (Tushare PRO 机构专线版 + 漏斗清洗)
+# 6. 资讯中心 (多源 Tushare PRO 机构专线 + 严格清洗)
 # ============================================================
 @st.cache_data(ttl=300, show_spinner=False)
 def get_cls_telegraph(count: int = 50) -> list:
-    """使用 Tushare PRO 获取标准化资讯，自带漏斗清洗"""
+    """使用 Tushare PRO 获取多源标准化资讯 (同花顺/华尔街见闻/东财/新浪)"""
     telegraphs = []
     pro = _get_tushare_pro()
     
@@ -170,67 +170,76 @@ def get_cls_telegraph(count: int = 50) -> list:
     
     overseas_limit = int(count * 0.3)
     overseas_current = 0
-    fetch_target = count * 4  # 宽口径拿数据
+
+    # 【核心升级】Tushare 顶级数据源优先级梯队 (A股散户风向标 -> 机构宏观视角 -> 大众门户)
+    sources_priority = {
+        "10jqka": "同花顺",
+        "wallstreetcn": "华尔街见闻",
+        "eastmoney": "东方财富",
+        "sina": "新浪财经"
+    }
 
     try:
-        # Tushare 需要时间区间，我们默认拉取过去3天，防止周末没资讯
+        # 提取过去 2 天的数据作为数据池
         now = datetime.now()
-        start_time = (now - timedelta(days=3)).strftime('%Y-%m-%d %H:%M:%S')
+        start_time = (now - timedelta(days=2)).strftime('%Y-%m-%d %H:%M:%S')
         end_time = now.strftime('%Y-%m-%d %H:%M:%S')
 
-        # 1. Tushare 专线：新浪源
-        df_sina = pro.news(src='sina', start_date=start_time, end_date=end_time, limit=fetch_target)
-        if df_sina is not None and not df_sina.empty:
-            for _, row in df_sina.iterrows():
-                if len(telegraphs) >= count: break
+        # 按优先级依次轮询数据源，直到填满用户需要的 count (如300条)
+        for src_code, src_name in sources_priority.items():
+            if len(telegraphs) >= count:
+                break
                 
-                title = str(row.get('title', ''))
-                content = str(row.get('content', ''))
-                if content == 'nan' or not content: content = title
-                if title == 'nan' or not title: title = content[:60] + "..."
-                
-                full_text = title + content
-                
-                # 漏斗清洗
-                if any(w in full_text for w in noise_words): continue
-                if any(w in full_text for w in overseas_words):
-                    if overseas_current >= overseas_limit: continue
-                    overseas_current += 1
-
-                # 提取时间格式，从 "2026-02-24 14:30:00" 变成 "14:30"
-                time_str = str(row.get('datetime', ''))
-                pub_time = time_str.split(" ")[1][:5] if " " in time_str else time_str
-                
-                telegraphs.append({"time": pub_time, "title": title, "content": content, "important": False, "source": "新浪(TS)"})
-
-        # 2. Tushare 专线补底：东财富源
-        if len(telegraphs) < count:
-            df_em = pro.news(src='eastmoney', start_date=start_time, end_date=end_time, limit=fetch_target)
-            if df_em is not None and not df_em.empty:
-                for _, row in df_em.iterrows():
+            # 每个源单次索取最大 500 条原始数据交由漏斗清洗
+            df = pro.news(src=src_code, start_date=start_time, end_date=end_time, limit=500)
+            
+            if df is not None and not df.empty:
+                for _, row in df.iterrows():
                     if len(telegraphs) >= count: break
                     
-                    title = str(row.get('title', ''))
-                    content = str(row.get('content', ''))
-                    if content == 'nan' or not content: content = title
-                    if title == 'nan' or not title: continue
+                    # 1. 提取并清理 None/NaN 幽灵
+                    raw_title = row.get('title')
+                    raw_content = row.get('content')
                     
+                    title = str(raw_title).strip() if pd.notna(raw_title) else ""
+                    content = str(raw_content).strip() if pd.notna(raw_content) else ""
+                    
+                    # 强制干掉被 Pandas 转义的文字版 "None" 和 "nan"
+                    if title.lower() in ["none", "nan", ""]: title = ""
+                    if content.lower() in ["none", "nan", ""]: content = ""
+                    
+                    if not title and not content:
+                        continue
+                        
+                    # 2. 标题内容互补修复
+                    if not title:
+                        title = content[:60] + "..."
+                    if not content:
+                        content = title
+                        
                     full_text = title + content
                     
-                    # 查重与漏斗清洗
+                    # 3. 严格去重与漏斗过滤
                     if any(title in t["title"] for t in telegraphs): continue
                     if any(w in full_text for w in noise_words): continue
                     if any(w in full_text for w in overseas_words):
                         if overseas_current >= overseas_limit: continue
                         overseas_current += 1
 
+                    # 4. 时间格式化
                     time_str = str(row.get('datetime', ''))
                     pub_time = time_str.split(" ")[1][:5] if " " in time_str else time_str
                     
-                    telegraphs.append({"time": pub_time, "title": title, "content": content, "important": False, "source": "东财(TS)"})
+                    telegraphs.append({
+                        "time": pub_time, 
+                        "title": title, 
+                        "content": content, 
+                        "important": False, 
+                        "source": src_name
+                    })
 
     except Exception as e:
-        print(f"[报错诊断] Tushare专线获取失败: {e}")
+        print(f"[报错诊断] Tushare多源聚合失败: {e}")
 
     return telegraphs[:count]
 
