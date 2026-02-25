@@ -1,7 +1,8 @@
 """
-数据采集模块 V4 - 寻星情报中心
+数据采集模块 V4.1 - 寻星情报中心
 ================================================================
 核心架构: Tushare PRO 优先 → AKShare 降级兜底
+军规升级: Q2/Q5 强制切入前复权(qfq)流，消灭除权价格失真，加入防封禁限流
 ================================================================
 数据层级:
   L1  指数行情: Tushare daily → AKShare fallback
@@ -34,6 +35,8 @@ import streamlit as st
 import urllib3
 import certifi
 import shutil
+import time
+import tushare as ts
 
 # ============================================================
 # 基础设施
@@ -86,7 +89,6 @@ def _import_akshare():
 def _get_tushare_pro():
     """获取 Tushare PRO 接口实例 (全局缓存)"""
     try:
-        import tushare as ts
         token = ""
         try:
             token = st.secrets.get("TUSHARE_TOKEN", "")
@@ -1397,14 +1399,20 @@ def get_industry_moneyflow() -> pd.DataFrame:
 # ============================================================
 @st.cache_data(ttl=300, show_spinner=False)
 def get_stock_daily(ts_code: str, days: int = 120) -> pd.DataFrame:
-    """获取单只股票日线行情"""
+    """获取单只股票日线行情 (V4.1 架构师修正：强制前复权)"""
     pro = _get_tushare_pro()
     if not pro:
         return pd.DataFrame()
     try:
+        import tushare as ts
         end = _last_trade_date()
         start = (datetime.now() - timedelta(days=days * 1.5)).strftime("%Y%m%d")
-        df = pro.daily(ts_code=ts_code, start_date=start, end_date=end)
+        
+        # 极简令牌桶限流，保护 API Token
+        time.sleep(0.05) 
+        # 核心修正：强制使用 pro_bar 并在源头执行 qfq
+        df = ts.pro_bar(ts_code=ts_code, api=pro, adj='qfq', start_date=start, end_date=end)
+        
         if df is not None and not df.empty:
             df = df.sort_values("trade_date").reset_index(drop=True)
             for c in ["open", "high", "low", "close", "vol", "amount", "pct_chg"]:
@@ -1504,16 +1512,23 @@ def get_market_snapshot() -> pd.DataFrame:
 # ============================================================
 @st.cache_data(ttl=600, show_spinner=False)
 def get_multi_stock_daily(ts_codes: list, days: int = 60) -> dict:
-    """批量获取多只股票日线 — 用于因子计算"""
+    """批量获取多只股票日线 — 用于因子计算 (V4.1 架构师修正：强制前复权)"""
     pro = _get_tushare_pro()
     if not pro:
         return {}
+        
+    import tushare as ts
     result = {}
     end = _last_trade_date()
     start = (datetime.now() - timedelta(days=days * 1.5)).strftime("%Y%m%d")
+    
     for ts_code in ts_codes[:50]:  # 最多50只，避免API过载
         try:
-            df = pro.daily(ts_code=ts_code, start_date=start, end_date=end)
+            # 极简令牌桶限流，保护 API Token
+            time.sleep(0.05) 
+            # 核心修正：强制使用 pro_bar 并在源头执行 qfq
+            df = ts.pro_bar(ts_code=ts_code, api=pro, adj='qfq', start_date=start, end_date=end)
+            
             if df is not None and not df.empty:
                 df = df.sort_values("trade_date").reset_index(drop=True)
                 for c in ["open", "high", "low", "close", "vol", "amount", "pct_chg"]:
@@ -1753,16 +1768,6 @@ def quant_stock_screener(
     2. 批量获取日线 → 计算技术因子
     3. 批量获取资金流向 → 计算资金因子
     4. 多因子加权打分 → 排名输出 TOP N
-
-    默认因子权重:
-    - 动量_20日: 15%  (趋势强度)
-    - 量比_5/20: 15%  (量价配合)
-    - MACD金叉: 10%   (技术信号)
-    - 均线多头: 10%   (趋势确认)
-    - RSI_14: 10%     (动能, 50-80区间得分高)
-    - 主力净流入_5日: 20% (聪明钱)
-    - 主力连续流入天数: 10% (持续性)
-    - 20日新高: 10%   (突破信号)
     """
     if factors_weight is None:
         factors_weight = {
